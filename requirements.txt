@@ -1,0 +1,16 @@
+# AutoSpecUploader Python Dependencies
+
+# System information
+psutil>=5.9.0
+
+# HTTP requests
+requests>=2.28.0
+
+# GUI (Essentials only — no QtQuick/QtQml/QtNetwork bloat)
+PySide6-Essentials>=6.5.0
+
+# Windows system information via COM/WMI (REQUIRED for Windows)
+# Pure Python WMI access - no PowerShell subprocess calls
+pywin32>=306; sys_platform == "win32"
+wmi>=1.5.1; sys_platform == "win32"
+

@@ -1,0 +1,2020 @@
+"""
+PC AutoSpec — Dialogs (PySide6).
+SettingsDialog: API key, URL, test connection.
+ReportPreviewDialog: rendered HTML preview matching RepairDesk display.
+DetailDialog: drill-down popup for diagnostic sections.
+"""
+
+import re
+import logging
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QPalette, QColor
+
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QTextEdit, QCheckBox, QWidget, QApplication,
+    QScrollArea, QFrame, QProgressBar,
+    QMessageBox,
+    QComboBox,
+    QListWidget,
+    QListWidgetItem,
+)
+from theme import COLORS
+from settings import (
+    APP_NAME, APP_VERSION, load_settings, save_settings, is_configured, DEFAULTS,
+    SCAN_CATEGORIES, get_tech_names, get_tech_api_key, save_technicians,
+    get_technicians,
+)
+from repairdesk_api import RepairDeskAPI
+
+
+
+# ─── QMessageBox light-theme helper ─────────────────────────────────
+# The app uses a dark global stylesheet; native QMessageBox inherits it
+# and becomes unreadable. This helper overrides the palette to be light.
+def _checkmark_svg_path():
+    """
+    Write a white checkmark SVG to a temp file and return its path.
+    Qt stylesheets cannot use data: URIs for images, but CAN use file paths.
+    We cache the path so the file is only written once per session.
+    """
+    import tempfile, os
+    if not hasattr(_checkmark_svg_path, '_cached'):
+        svg = (
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'>"
+            "<polyline points='2,7 5.5,10.5 12,3' "
+            "stroke='white' stroke-width='2.2' fill='none' "
+            "stroke-linecap='round' stroke-linejoin='round'/>"
+            "</svg>"
+        )
+        tmp = tempfile.NamedTemporaryFile(
+            suffix='.svg', delete=False, mode='w', encoding='utf-8')
+        tmp.write(svg)
+        tmp.close()
+        _checkmark_svg_path._cached = tmp.name.replace('\\', '/')
+    return _checkmark_svg_path._cached
+
+
+_MSGBOX_STYLE = """
+    QMessageBox {
+        background-color: #f5f5f5;
+        color: #1a1a1a;
+    }
+    QMessageBox QLabel {
+        color: #1a1a1a;
+        font-size: 10pt;
+        min-width: 320px;
+    }
+    QMessageBox QPushButton {
+        background-color: #10B981;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        padding: 6px 20px;
+        font-size: 10pt;
+        min-width: 80px;
+    }
+    QMessageBox QPushButton:hover {
+        background-color: #059669;
+    }
+    QMessageBox QPushButton:focus {
+        outline: none;
+        border: 2px solid #047857;
+    }
+"""
+
+def _make_msgbox(parent, title, text, buttons=None, default=None):
+    """
+    Create a light-themed QMessageBox readable against the dark app.
+
+    KEY: We do NOT pass the dark-themed parent to QMessageBox — doing so
+    causes Qt on Windows to inherit the parent's dark stylesheet down to
+    the box's internal QLabel children, painting the window dark blue even
+    when a light stylesheet is applied.  By passing None we break the
+    inheritance chain; we then call setWindowModality to keep it modal and
+    center it over the parent manually.
+    """
+    box = QMessageBox()          # <-- no parent = no style inheritance
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setWindowModality(Qt.WindowModality.ApplicationModal)
+
+    # Centre over the real parent window
+    if parent is not None:
+        geo = parent.geometry()
+        box.move(
+            geo.x() + (geo.width()  - 460) // 2,
+            geo.y() + (geo.height() - 180) // 2,
+        )
+
+    # Light palette so text is readable
+    pal = QPalette()
+    pal.setColor(QPalette.ColorRole.Window,      QColor("#f5f5f5"))
+    pal.setColor(QPalette.ColorRole.WindowText,  QColor("#1a1a1a"))
+    pal.setColor(QPalette.ColorRole.Base,        QColor("#f5f5f5"))
+    pal.setColor(QPalette.ColorRole.Text,        QColor("#1a1a1a"))
+    pal.setColor(QPalette.ColorRole.ButtonText,  QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.Button,      QColor("#10B981"))
+    box.setPalette(pal)
+    box.setStyleSheet(_MSGBOX_STYLE)
+
+    if buttons is not None:
+        box.setStandardButtons(buttons)
+    if default is not None:
+        box.setDefaultButton(default)
+    return box
+
+
+# ─── Startup / Job Setup Dialog ──────────────────────────────────────
+
+class StartupDialog(QDialog):
+    """
+    Shown at startup before every scan (skippable via X).
+    Tech enters: name, ticket ID (with confirmation), report type,
+    tech notes, and selects which test categories to run.
+
+    Attributes set on accept or skip:
+        tech_name      (str)
+        ticket_id      (str)   — raw number, e.g. "15108"
+        ticket_info    (dict)  — from API, or {} if not confirmed
+        report_type    (str)   — "Initial Device Report" | "Final Device Report (Post Repair)"
+        tech_notes     (str)
+        skip_categories (set)  — category keys NOT selected
+    """
+
+    REPORT_TYPE_INITIAL = "Initial Device Report"
+    REPORT_TYPE_FINAL   = "Final Device Report (Post Repair)"
+
+    def __init__(self, parent=None, prefill_tech_name=""):
+        super().__init__(parent)
+        self.setWindowTitle("Job Setup")
+        self.setMinimumWidth(560)
+        self.setMaximumWidth(680)
+
+        # Result attributes (populated on accept or left as defaults on skip)
+        self.tech_name       = ""
+        self.ticket_id       = ""
+        self.ticket_info     = {}
+        self.report_type     = ""
+        self.tech_notes      = ""
+        self.skip_categories = set()
+
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ── Header ────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(54)
+        header.setStyleSheet(f"background-color: {COLORS['header_bg']};")
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(20, 0, 20, 0)
+        title_lbl = QLabel("Job Setup")
+        title_lbl.setStyleSheet(
+            f"color: {COLORS['header_text']}; font-size: 13px; font-weight: bold;")
+        h_layout.addWidget(title_lbl)
+        h_layout.addStretch()
+        hint = QLabel(f"v{APP_VERSION}  —  Enter details before starting the scan")
+        hint.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9pt;")
+        h_layout.addWidget(hint)
+        outer.addWidget(header)
+
+        # ── Body ──────────────────────────────────────────────────
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(24, 20, 24, 8)
+        body_layout.setSpacing(16)
+        outer.addWidget(body)
+
+        # Helper: section label style
+        def _section_lbl(text):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
+                f"color: {COLORS['text_secondary']}; font-size: 10pt; font-weight: bold;")
+            return lbl
+
+        # Helper: input style
+        input_style = (
+            f"background-color: {COLORS['console_bg']}; "
+            f"color: {COLORS['console_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 6px; padding: 6px 10px; font-size: 10pt;"
+        )
+
+        # ── Tech Name / Selector ──────────────────────────────────
+        s = load_settings()
+        tech_names = get_tech_names()
+        tech_header_row = QHBoxLayout()
+        tech_header_row.setContentsMargins(0, 0, 0, 0)
+        tech_header_row.addWidget(_section_lbl("Technician"))
+        tech_header_row.addStretch()
+        # Manage Techs moved to Settings dialog
+        body_layout.addLayout(tech_header_row)
+
+        if tech_names:
+            # Dropdown — techs are configured
+            self._name_combo = QComboBox()
+            self._name_combo.setFixedHeight(36)
+            self._name_combo.setStyleSheet(
+                f"background-color: {COLORS['console_bg']}; "
+                f"color: {COLORS['console_text']}; "
+                f"border: 1px solid {COLORS['card_border']}; "
+                "border-radius: 6px; padding: 2px 8px; font-size: 10pt; "
+                f"selection-background-color: {COLORS['success']};"
+            )
+            for name in tech_names:
+                self._name_combo.addItem(name)
+            # Pre-select last used tech
+            last = prefill_tech_name or s.get('last_tech_name', '')
+            if last in tech_names:
+                self._name_combo.setCurrentText(last)
+            body_layout.addWidget(self._name_combo)
+            self._name_input = None  # not used in dropdown mode
+            self._tech_mode = 'combo'
+        else:
+            # Free text — no techs configured yet
+            self._name_input = QLineEdit()
+            self._name_input.setPlaceholderText("Your first name  (add techs via ⚙ Settings → Manage Techs)")
+            self._name_input.setFixedHeight(36)
+            self._name_input.setStyleSheet(input_style)
+            self._name_input.setText(prefill_tech_name or s.get('last_tech_name', ''))
+            body_layout.addWidget(self._name_input)
+            self._name_combo = None
+            self._tech_mode = 'text'
+
+        # ── Ticket ID + Confirm ───────────────────────────────────
+        body_layout.addWidget(_section_lbl("Ticket ID  (optional — can be entered at upload)"))
+        ticket_row = QHBoxLayout()
+        ticket_row.setSpacing(8)
+        self._ticket_input = QLineEdit()
+        self._ticket_input.setPlaceholderText("e.g. 15108  or  T-15108")
+        self._ticket_input.setFixedHeight(36)
+        self._ticket_input.setStyleSheet(input_style)
+        self._ticket_input.textChanged.connect(self._on_ticket_text_changed)
+        ticket_row.addWidget(self._ticket_input, 1)
+
+        self._confirm_btn = QPushButton("Confirm Ticket")
+        self._confirm_btn.setFixedHeight(36)
+        self._confirm_btn.setEnabled(False)
+        self._confirm_btn.setCursor(Qt.PointingHandCursor)
+        self._confirm_btn.setStyleSheet(
+            f"background-color: {COLORS['primary']}; color: white; "
+            "border: none; border-radius: 6px; font-weight: bold; padding: 0 16px;")
+        self._confirm_btn.clicked.connect(self._on_confirm_ticket)
+        ticket_row.addWidget(self._confirm_btn)
+        body_layout.addLayout(ticket_row)
+
+        # Ticket status label (shows customer/device after confirmation)
+        self._ticket_status = QLabel("")
+        self._ticket_status.setWordWrap(True)
+        self._ticket_status.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt;")
+        body_layout.addWidget(self._ticket_status)
+
+        # ── Report Type ───────────────────────────────────────────
+        body_layout.addWidget(_section_lbl("Report Type  ✱ Required"))
+
+        # Large toggle-style buttons — much more obvious than radio buttons
+        _btn_base = (
+            "QPushButton {"
+            "  border: 2px solid #374151;"
+            "  border-radius: 8px;"
+            "  padding: 12px 20px;"
+            "  font-size: 11pt;"
+            "  font-weight: bold;"
+            "  text-align: center;"
+            "  color: #9CA3AF;"
+            "  background-color: #1F2937;"
+            "}"
+            "QPushButton:hover {"
+            "  border-color: #6B7280;"
+            "  color: #D1D5DB;"
+            "  background-color: #374151;"
+            "}"
+        )
+        _btn_selected = (
+            "QPushButton {"
+            "  border: 2px solid #10B981;"
+            "  border-radius: 8px;"
+            "  padding: 12px 20px;"
+            "  font-size: 11pt;"
+            "  font-weight: bold;"
+            "  text-align: center;"
+            "  color: #ffffff;"
+            "  background-color: #065F46;"
+            "}"
+        )
+
+        toggle_row = QHBoxLayout()
+        toggle_row.setSpacing(12)
+
+        self._radio_initial = QPushButton("🔍  Initial Device Report")
+        self._radio_initial.setCheckable(True)
+        self._radio_initial.setFixedHeight(56)
+        self._radio_initial.setStyleSheet(_btn_base)
+
+        self._radio_final = QPushButton("✅  Final Device Report (Post Repair)")
+        self._radio_final.setCheckable(True)
+        self._radio_final.setFixedHeight(56)
+        self._radio_final.setStyleSheet(_btn_base)
+
+        # Store styles for toggling
+        self._rtype_base = _btn_base
+        self._rtype_selected = _btn_selected
+
+        def _select_initial():
+            self._radio_initial.setChecked(True)
+            self._radio_final.setChecked(False)
+            self._radio_initial.setStyleSheet(_btn_selected)
+            self._radio_final.setStyleSheet(_btn_base)
+            self._report_type_warning.setVisible(False)
+
+        def _select_final():
+            self._radio_final.setChecked(True)
+            self._radio_initial.setChecked(False)
+            self._radio_final.setStyleSheet(_btn_selected)
+            self._radio_initial.setStyleSheet(_btn_base)
+            self._report_type_warning.setVisible(False)
+
+        self._radio_initial.clicked.connect(_select_initial)
+        self._radio_final.clicked.connect(_select_final)
+
+        toggle_row.addWidget(self._radio_initial)
+        toggle_row.addWidget(self._radio_final)
+        body_layout.addLayout(toggle_row)
+
+        self._report_type_warning = QLabel("⚠  Please select a report type before starting")
+        self._report_type_warning.setStyleSheet("color: #EF4444; font-size: 9pt;")
+        self._report_type_warning.setVisible(False)
+        body_layout.addWidget(self._report_type_warning)
+
+        # ── Tech Notes ────────────────────────────────────────────
+        body_layout.addWidget(_section_lbl(
+            "Tech Notes  (optional — also editable at upload time)"))
+        self._notes_input = QTextEdit()
+        self._notes_input.setPlaceholderText(
+            "e.g. customer reports slow startup, cracked hinge, fan noise...")
+        self._notes_input.setFixedHeight(72)
+        self._notes_input.setStyleSheet(
+            f"background-color: {COLORS['console_bg']}; "
+            f"color: {COLORS['console_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 6px; padding: 8px; font-size: 10pt;")
+        body_layout.addWidget(self._notes_input)
+
+        # ── Test Categories ───────────────────────────────────────
+        body_layout.addWidget(_section_lbl(
+            "Tests to Run  (uncheck to skip — skipped tests noted in report)"))
+
+        cat_grid = QHBoxLayout()
+        cat_grid.setSpacing(12)
+        self._category_checks = {}
+        for key, label in SCAN_CATEGORIES:
+            cb = QCheckBox(label)
+            cb.setChecked(True)
+            cb.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {COLORS['console_text']};
+                    font-size: 10pt;
+                    spacing: 6px;
+                }}
+                QCheckBox::indicator {{
+                    width: 18px;
+                    height: 18px;
+                    border: 2px solid {COLORS['success']};
+                    border-radius: 4px;
+                    background: transparent;
+                }}
+                QCheckBox::indicator:unchecked {{
+                    background-color: transparent;
+                }}
+                QCheckBox::indicator:checked {{
+                    background-color: {COLORS['success']};
+                    border: 2px solid {COLORS['success']};
+                    image: url({_checkmark_svg_path()});
+                }}
+            """)
+            self._category_checks[key] = cb
+            cat_grid.addWidget(cb)
+        cat_grid.addStretch()
+        body_layout.addLayout(cat_grid)
+
+        # ── Buttons ───────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 12, 0, 16)
+        btn_row.setSpacing(10)
+
+        skip_btn = QPushButton("Skip — Start Scan Anyway")
+        skip_btn.setObjectName("secondary")
+        skip_btn.setFixedHeight(40)
+        skip_btn.setCursor(Qt.PointingHandCursor)
+        skip_btn.clicked.connect(self._on_skip)
+        btn_row.addWidget(skip_btn)
+
+        btn_row.addStretch()
+
+        self._start_btn = QPushButton("Start Scan  ▶")
+        self._start_btn.setFixedHeight(40)
+        self._start_btn.setMinimumWidth(160)
+        self._start_btn.setCursor(Qt.PointingHandCursor)
+        self._start_btn.setStyleSheet(
+            f"background-color: {COLORS['primary']}; color: white; "
+            "border: none; border-radius: 8px; font-weight: bold; font-size: 12px;")
+        self._start_btn.clicked.connect(self._on_start)
+        btn_row.addWidget(self._start_btn)
+
+        body_layout.addLayout(btn_row)
+
+        self.adjustSize()
+
+    # ── Ticket handling ───────────────────────────────────────────
+
+    def _on_ticket_text_changed(self, text):
+        has_text = len(text.strip()) > 0
+        self._confirm_btn.setEnabled(has_text)
+        # Reset confirmation if text changes after a confirm
+        if self.ticket_info:
+            self.ticket_info = {}
+            self.ticket_id   = ""
+            self._ticket_status.setText("")
+            self._ticket_status.setStyleSheet(
+                f"color: {COLORS['text_secondary']}; font-size: 9pt;")
+
+    def _on_confirm_ticket(self):
+        """Fetch ticket from RepairDesk and show customer/device confirmation."""
+        raw = self._ticket_input.text().strip()
+        if not raw:
+            return
+        ticket_num = raw.upper().lstrip("T-").lstrip("T") if raw.upper().startswith("T") else raw
+        # Strip any leading dashes
+        ticket_num = ticket_num.lstrip("-")
+
+        self._confirm_btn.setEnabled(False)
+        self._confirm_btn.setText("Confirming...")
+        self._ticket_status.setText("Looking up ticket...")
+        self._ticket_status.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt;")
+        QApplication.processEvents()
+
+        try:
+            api = RepairDeskAPI()
+            info = api.get_ticket_customer(ticket_num)
+
+            customer = info.get('customer_name', 'Unknown')
+            device   = info.get('device', '')
+            t_num    = info.get('ticket_number', ticket_num)
+
+            # Show inline confirmation
+            msg = f"T-{t_num}  ·  {customer}"
+            if device:
+                msg += f"  ·  {device}"
+
+            # Ask for confirmation via message box (same flow as upload)
+            _box = _make_msgbox(
+                self, "Confirm Ticket",
+                f"Is this the correct ticket?\n\nTicket:    T-{t_num}\nCustomer:  {customer}\n"
+                + (f"Device:    {device}\n" if device else ""),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            reply = _box.exec()
+
+            if reply == QMessageBox.StandardButton.Yes.value:
+                self.ticket_id   = ticket_num
+                self.ticket_info = info
+                self._ticket_status.setText(f"✓  {msg}")
+                self._ticket_status.setStyleSheet(
+                    f"color: {COLORS['success']}; font-size: 9pt; font-weight: bold;")
+                self._confirm_btn.setText("✓ Confirmed")
+                self._confirm_btn.setEnabled(False)
+                self._confirm_btn.setStyleSheet(
+                    f"background-color: {COLORS['success']}; color: white; "
+                    "border: none; border-radius: 6px; font-weight: bold; padding: 0 16px;")
+            else:
+                self._ticket_status.setText("Not confirmed — enter a different ticket number")
+                self._ticket_status.setStyleSheet(
+                    f"color: {COLORS['warning']}; font-size: 9pt;")
+                self._confirm_btn.setText("Confirm Ticket")
+                self._confirm_btn.setEnabled(True)
+                self.ticket_info = {}
+                self.ticket_id   = ""
+
+        except Exception as e:
+            self._ticket_status.setText(f"⚠ Could not look up ticket: {e}")
+            self._ticket_status.setStyleSheet(
+                f"color: {COLORS['warning']}; font-size: 9pt;")
+            self._confirm_btn.setText("Confirm Ticket")
+            self._confirm_btn.setEnabled(True)
+
+    # ── Manage Techs ─────────────────────────────────────────────
+
+    def _open_manage_techs(self):
+        """Open the Manage Techs dialog and refresh the tech selector after."""
+        dlg = ManageTechsDialog(parent=self)
+        dlg.exec()
+        # Refresh the tech selector after dialog closes
+        tech_names = get_tech_names()
+        if tech_names:
+            if self._tech_mode == 'combo' and self._name_combo:
+                current = self._name_combo.currentText()
+                self._name_combo.clear()
+                for name in tech_names:
+                    self._name_combo.addItem(name)
+                if current in tech_names:
+                    self._name_combo.setCurrentText(current)
+            elif self._tech_mode == 'text' and self._name_input:
+                # Switch to combo mode now that techs exist
+                # (simpler: just note the hint text — full rebuild would require re-layout)
+                self._name_input.setPlaceholderText(
+                    "Restart app to use tech dropdown, or type name manually"
+                )
+        # If no techs configured, keep text mode as-is
+
+    # ── Result helpers ────────────────────────────────────────────
+
+    def _collect_results(self):
+        """Pull values from UI into attributes."""
+        if self._tech_mode == 'combo' and self._name_combo:
+            self.tech_name = self._name_combo.currentText().strip()
+        elif self._name_input:
+            self.tech_name = self._name_input.text().strip()
+        else:
+            self.tech_name = ""  
+        self.tech_notes  = self._notes_input.toPlainText().strip()
+        self.report_type = (
+            self.REPORT_TYPE_INITIAL if self._radio_initial.isChecked() else
+            self.REPORT_TYPE_FINAL   if self._radio_final.isChecked() else
+            ""
+        )
+        self.skip_categories = {
+            key for key, cb in self._category_checks.items()
+            if not cb.isChecked()
+        }
+        # Save tech name for next session
+        if self.tech_name:
+            s = load_settings()
+            s['last_tech_name'] = self.tech_name
+            save_settings(s)
+
+    # ── Button handlers ───────────────────────────────────────────
+
+    def _on_start(self):
+        """Validate report type then accept."""
+        if not self._radio_initial.isChecked() and not self._radio_final.isChecked():
+            self._report_type_warning.setVisible(True)
+            return
+        self._report_type_warning.setVisible(False)
+        self._collect_results()
+        self.accept()
+
+    def _on_skip(self):
+        """Dismiss without validation — tech fills in later."""
+        self._collect_results()
+        # If no report type selected on skip, leave blank
+        self.reject()
+
+# ─── Welcome / First-Run Dialog ─────────────────────────────────────
+
+class WelcomeDialog(QDialog):
+    """First-run setup dialog for store, RepairDesk, and shop WiFi settings."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._settings = load_settings()
+
+        self.setWindowTitle(f"{APP_NAME} — First Use Setup")
+        self.setFixedSize(560, 500)
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(14)
+
+        # Title
+        title = QLabel("First Use Setup")
+        title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 18px; "
+            "font-weight: bold;")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Enter your shop details before the first scan. "
+            "These settings are saved next to the app and can be changed later."
+        )
+        subtitle.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(4)
+
+        # Store name
+        store_label = QLabel("Store Name")
+        store_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; "
+            "font-weight: bold;")
+        layout.addWidget(store_label)
+
+        self._store_input = QLineEdit()
+        self._store_input.setPlaceholderText("Your shop name")
+        self._store_input.setFixedHeight(36)
+        self._store_input.setText(self._settings.get('store_name', ''))
+        layout.addWidget(self._store_input)
+
+        # API key
+        key_label = QLabel("RepairDesk API Key")
+        key_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; "
+            "font-weight: bold;")
+        layout.addWidget(key_label)
+
+        self._key_input = QLineEdit()
+        self._key_input.setPlaceholderText("Paste your API key")
+        self._key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._key_input.setFixedHeight(36)
+        self._key_input.setText(self._settings.get('api_key', ''))
+
+        key_row = QHBoxLayout()
+        key_row.setSpacing(8)
+        key_row.addWidget(self._key_input, 1)
+
+        self._show_key_cb = QCheckBox("Show")
+        self._show_key_cb.setStyleSheet("border: none;")
+        self._show_key_cb.toggled.connect(
+            lambda checked: self._key_input.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        key_row.addWidget(self._show_key_cb)
+        layout.addLayout(key_row)
+
+        # WiFi SSID
+        wifi_label = QLabel("Shop WiFi SSID")
+        wifi_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; "
+            "font-weight: bold;")
+        layout.addWidget(wifi_label)
+
+        self._wifi_ssid_input = QLineEdit()
+        self._wifi_ssid_input.setPlaceholderText("Guest or shop WiFi name")
+        self._wifi_ssid_input.setFixedHeight(36)
+        self._wifi_ssid_input.setText(self._settings.get('wifi_ssid', ''))
+        layout.addWidget(self._wifi_ssid_input)
+
+        # WiFi password
+        wifi_pass_label = QLabel("Shop WiFi Password")
+        wifi_pass_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; "
+            "font-weight: bold;")
+        layout.addWidget(wifi_pass_label)
+
+        self._wifi_pass_input = QLineEdit()
+        self._wifi_pass_input.setPlaceholderText("WiFi password")
+        self._wifi_pass_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._wifi_pass_input.setFixedHeight(36)
+        self._wifi_pass_input.setText(self._settings.get('wifi_password', ''))
+
+        wifi_pass_row = QHBoxLayout()
+        wifi_pass_row.setSpacing(8)
+        wifi_pass_row.addWidget(self._wifi_pass_input, 1)
+
+        self._show_wifi_cb = QCheckBox("Show")
+        self._show_wifi_cb.setStyleSheet("border: none;")
+        self._show_wifi_cb.toggled.connect(
+            lambda checked: self._wifi_pass_input.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        wifi_pass_row.addWidget(self._show_wifi_cb)
+        layout.addLayout(wifi_pass_row)
+
+        hint = QLabel(
+            "WiFi auto-connect is only used when the scanned machine has no internet. "
+            "You can update these values later in Settings."
+        )
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        layout.addStretch()
+
+        # Save button
+        self._save_btn = QPushButton("Save and Continue")
+        self._save_btn.setObjectName("primary")
+        self._save_btn.setCursor(Qt.PointingHandCursor)
+        self._save_btn.setFixedHeight(44)
+        self._save_btn.setEnabled(False)
+        self._save_btn.clicked.connect(self._on_save)
+        layout.addWidget(self._save_btn)
+
+        # Enable save when all fields have content
+        self._store_input.textChanged.connect(self._check_fields)
+        self._key_input.textChanged.connect(self._check_fields)
+        self._wifi_ssid_input.textChanged.connect(self._check_fields)
+        self._wifi_pass_input.textChanged.connect(self._check_fields)
+        self._check_fields()
+
+    def _check_fields(self):
+        has_store = len(self._store_input.text().strip()) > 0
+        has_key = len(self._key_input.text().strip()) > 5
+        has_wifi_ssid = len(self._wifi_ssid_input.text().strip()) > 0
+        has_wifi_password = len(self._wifi_pass_input.text().strip()) > 0
+        self._save_btn.setEnabled(
+            has_store and has_key and has_wifi_ssid and has_wifi_password
+        )
+
+    def _on_save(self):
+        settings = load_settings()
+        settings['store_name'] = self._store_input.text().strip()
+        settings['api_key'] = self._key_input.text().strip()
+        settings['wifi_ssid'] = self._wifi_ssid_input.text().strip()
+        settings['wifi_password'] = self._wifi_pass_input.text().strip()
+        settings['wifi_auto_connect'] = True
+        save_settings(settings)
+        self.accept()
+
+
+# ─── Launch Dialog ───────────────────────────────────────────────────
+
+class LaunchDialog(QDialog):
+    """Shown every time the app launches — captures tech name and ticket number."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.tech_name = ""
+        self.ticket_number = ""
+
+        self.setWindowTitle(f"{APP_NAME} — Start Scan")
+        self.setFixedSize(420, 260)
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(32, 28, 32, 24)
+        layout.setSpacing(14)
+
+        # Title
+        title = QLabel("Start New Scan")
+        title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 18px; font-weight: bold;")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        subtitle = QLabel("Enter your name and the RepairDesk ticket number.")
+        subtitle.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(4)
+
+        # Tech name
+        name_lbl = QLabel("Your Name")
+        name_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; font-weight: bold;")
+        layout.addWidget(name_lbl)
+
+        self._name_input = QLineEdit()
+        self._name_input.setPlaceholderText("First name")
+        self._name_input.setFixedHeight(38)
+        # Remember last used name
+        s = load_settings()
+        self._name_input.setText(s.get('last_tech_name', ''))
+        layout.addWidget(self._name_input)
+
+        # Ticket number
+        ticket_lbl = QLabel("Ticket Number")
+        ticket_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; font-weight: bold;")
+        layout.addWidget(ticket_lbl)
+
+        self._ticket_input = QLineEdit()
+        self._ticket_input.setPlaceholderText("e.g. 15108 or T-15108")
+        self._ticket_input.setFixedHeight(38)
+        layout.addWidget(self._ticket_input)
+
+        layout.addStretch()
+
+        # Start button
+        self._start_btn = QPushButton("Start Scan")
+        self._start_btn.setObjectName("primary")
+        self._start_btn.setCursor(Qt.PointingHandCursor)
+        self._start_btn.setFixedHeight(44)
+        self._start_btn.setEnabled(False)
+        self._start_btn.clicked.connect(self._on_start)
+        layout.addWidget(self._start_btn)
+
+        self._name_input.textChanged.connect(self._check_fields)
+        self._ticket_input.textChanged.connect(self._check_fields)
+        self._ticket_input.returnPressed.connect(self._start_btn.click)
+
+    def _check_fields(self):
+        has_name = len(self._name_input.text().strip()) > 0
+        has_ticket = len(self._ticket_input.text().strip()) > 0
+        self._start_btn.setEnabled(has_name and has_ticket)
+
+    def _on_start(self):
+        self.tech_name = self._name_input.text().strip()
+        raw = self._ticket_input.text().strip().lstrip('Tt-').strip()
+        self.ticket_number = raw
+        # Remember tech name for next time
+        s = load_settings()
+        s['last_tech_name'] = self.tech_name
+        save_settings(s)
+        self.accept()
+
+
+# ─── Detail Drill-Down Dialog ────────────────────────────────────────
+
+class DetailDialog(QDialog):
+    """Popup showing detailed breakdown for a diagnostic section.
+
+    Usage:
+        dlg = DetailDialog("Event Log", parent=self)
+        dlg.add_row("Total Events", "18", color="#EF4444")
+        dlg.add_heading("Top Sources")
+        dlg.add_row("DistributedCOM", "7 events")
+        dlg.add_row("WHEA-Logger", "5 events")
+        dlg.add_text("Latest critical: WHEA-Logger at 2026-02-27 ...")
+        dlg.exec()
+    """
+
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Detail \u2014 {title}")
+        self.resize(720, 550)
+        self.setMinimumSize(560, 400)
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Header
+        header = QWidget()
+        header.setFixedHeight(48)
+        header.setStyleSheet(f"background-color: {COLORS['header_bg']};")
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(20, 0, 20, 0)
+        lbl = QLabel(title)
+        lbl.setStyleSheet(
+            f"color: {COLORS['header_text']}; font-size: 13px; "
+            f"font-weight: bold;")
+        h_lay.addWidget(lbl)
+        outer.addWidget(header)
+
+        # Scrollable content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            f"QScrollArea {{ border: none; background: {COLORS['bg_root']}; }}")
+        self._content = QWidget()
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(20, 12, 20, 12)
+        self._content_layout.setSpacing(0)
+        scroll.setWidget(self._content)
+        outer.addWidget(scroll, 1)
+
+        self._row_count = 0
+
+        # Close button
+        btn_bar = QHBoxLayout()
+        btn_bar.setContentsMargins(20, 8, 20, 16)
+        btn_bar.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("secondary")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.close)
+        btn_bar.addWidget(close_btn)
+        outer.addLayout(btn_bar)
+
+    def add_row(self, label, value, color=None):
+        """Add a label:value row with alternating background."""
+        bg = COLORS['card_bg'] if self._row_count % 2 == 0 else COLORS['row_alt']
+        row = QWidget()
+        row.setStyleSheet(f"background-color: {bg}; border-radius: 0px;")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(8, 5, 8, 5)
+        lay.setSpacing(8)
+
+        lbl = QLabel(f"{label}:")
+        lbl.setObjectName("rowLabelBold")
+        lbl.setMinimumWidth(140)
+        lbl.setMaximumWidth(220)
+        lbl.setWordWrap(True)
+        lbl.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        lay.addWidget(lbl)
+
+        val = QLabel(str(value))
+        val.setObjectName("rowValue")
+        val.setWordWrap(True)
+        val.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        val.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        if color:
+            val.setStyleSheet(f"color: {color};")
+        lay.addWidget(val, 1)
+
+        self._content_layout.addWidget(row)
+        self._row_count += 1
+
+    def add_heading(self, text):
+        """Add a bold sub-heading to group rows."""
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"font-size: 12px; font-weight: bold; "
+            f"color: {COLORS['primary']}; "
+            f"padding: 10px 8px 4px 8px;")
+        self._content_layout.addWidget(lbl)
+
+    def add_text(self, text, color=None):
+        """Add a plain text line (wrapping, selectable)."""
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        style = f"padding: 4px 8px; font-size: 11px;"
+        if color:
+            style += f" color: {color};"
+        else:
+            style += f" color: {COLORS['text_secondary']};"
+        lbl.setStyleSheet(style)
+        self._content_layout.addWidget(lbl)
+
+    def add_separator(self):
+        """Add a thin horizontal line."""
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(
+            f"background-color: {COLORS['border']}; border: none;")
+        self._content_layout.addWidget(sep)
+
+
+# ─── Report Preview Dialog ───────────────────────────────────────────
+
+class ReportPreviewDialog(QDialog):
+    """Rendered HTML preview matching RepairDesk's note display.
+
+    Shows the diagnostic report as it will appear in RepairDesk.
+    Editable — user enters ticket number and uploads from here.
+
+    Usage:
+        dlg = ReportPreviewDialog(note_html, parent)
+        if dlg.exec() == QDialog.Accepted:
+            ticket_id = dlg.ticket_id    # e.g. "T-12345"
+            edited_html = dlg.edited_html
+    """
+
+    def __init__(self, note_html, issues=None, parent=None,
+                 prefill_ticket='', prefill_tech_name='', prefill_notes='',
+                 ticket_already_confirmed=False):
+        super().__init__(parent)
+        self.setWindowTitle("Scan Summary / Upload")
+        self.resize(920, 780)
+        self.setMinimumSize(700, 550)
+
+        self._original_html = note_html
+        self.edited_html = note_html
+        self.ticket_id = prefill_ticket or None
+        self.tech_name = prefill_tech_name or ""
+        self.tech_notes = prefill_notes or ""
+        self._issues = issues or []
+        self._ticket_already_confirmed = ticket_already_confirmed
+
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 0, 16, 12)
+        layout.setSpacing(6)
+
+        # ── Header ────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(50)
+        header.setStyleSheet(f"background-color: {COLORS['header_bg']};")
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(20, 0, 20, 0)
+        title = QLabel("Scan Summary / Upload")
+        title.setStyleSheet(
+            f"color: {COLORS['header_text']}; font-size: 13px; font-weight: bold;")
+        h_layout.addWidget(title)
+        h_layout.addStretch()
+        hint = QLabel("Review findings, add notes, then upload to RepairDesk")
+        hint.setStyleSheet(f"color: {COLORS['text_tertiary']}; font-size: 9pt;")
+        h_layout.addWidget(hint)
+        layout.addWidget(header)
+
+        # ── Tech name + ticket row ───────────────────────────────
+        fields_row = QHBoxLayout()
+        fields_row.setContentsMargins(0, 10, 0, 0)
+        fields_row.setSpacing(16)
+
+        name_lbl = QLabel("Tech Name:")
+        name_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10pt; font-weight: bold;")
+        name_lbl.setFixedWidth(80)
+        fields_row.addWidget(name_lbl)
+
+        self._name_input = QLineEdit()
+        self._name_input.setPlaceholderText("Your first name")
+        self._name_input.setFixedHeight(34)
+        self._name_input.setFixedWidth(160)
+        s = load_settings()
+        self._name_input.setText(s.get('last_tech_name', ''))
+        self._name_input.textChanged.connect(self._on_fields_changed)
+        fields_row.addWidget(self._name_input)
+
+        fields_row.addSpacing(8)
+
+        ticket_lbl = QLabel("Ticket #:")
+        ticket_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10pt; font-weight: bold;")
+        ticket_lbl.setFixedWidth(60)
+        fields_row.addWidget(ticket_lbl)
+
+        self._ticket_input = QLineEdit()
+        self._ticket_input.setPlaceholderText("e.g. 15108")
+        self._ticket_input.setFixedHeight(34)
+        self._ticket_input.setFixedWidth(160)
+        self._ticket_input.textChanged.connect(self._on_ticket_changed)
+        if prefill_ticket:
+            self._ticket_input.setText(prefill_ticket)
+        fields_row.addWidget(self._ticket_input)
+
+        fields_row.addStretch()
+
+        self._info_label = QLabel()
+        self._info_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt;")
+        fields_row.addWidget(self._info_label)
+        layout.addLayout(fields_row)
+
+        # ── Critical Issues panel ────────────────────────────────
+        if self._issues:
+            issues_widget = QWidget()
+            issues_widget.setStyleSheet(
+                "background-color: #2D1515; border: 1px solid #EF4444; border-radius: 6px;")
+            issues_layout = QVBoxLayout(issues_widget)
+            issues_layout.setContentsMargins(14, 10, 14, 10)
+            issues_layout.setSpacing(4)
+
+            issues_title = QLabel("⚠  CRITICAL ISSUES")
+            issues_title.setStyleSheet(
+                "color: #EF4444; font-size: 11px; font-weight: bold; border: none;")
+            issues_layout.addWidget(issues_title)
+
+            for issue in self._issues:
+                row = QLabel(f"• {issue}")
+                row.setStyleSheet(
+                    "color: #FCA5A5; font-size: 11px; border: none;")
+                row.setWordWrap(True)
+                issues_layout.addWidget(row)
+
+            layout.addWidget(issues_widget)
+
+        # ── Tech Notes ───────────────────────────────────────────
+        notes_lbl = QLabel("Tech Notes  (optional — will be included in the report)")
+        notes_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10pt; font-weight: bold;")
+        layout.addWidget(notes_lbl)
+
+        self._notes_input = QTextEdit()
+        self._notes_input.setPlaceholderText(
+            "e.g. noticed malware popups on startup, crack near charging port, fan making grinding noise...")
+        if prefill_notes:
+            self._notes_input.setPlainText(prefill_notes)
+        self._notes_input.setFixedHeight(72)
+        self._notes_input.setStyleSheet(
+            f"background-color: {COLORS['console_bg']}; "
+            f"color: {COLORS['console_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 6px; padding: 8px; font-size: 10pt;")
+        layout.addWidget(self._notes_input)
+
+        # ── Report preview ───────────────────────────────────────
+        preview_lbl = QLabel("Report Preview")
+        preview_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10pt; font-weight: bold;")
+        layout.addWidget(preview_lbl)
+
+        self._editor = QTextEdit()
+        self._editor.setStyleSheet(
+            f"background-color: {COLORS['console_bg']}; "
+            f"color: {COLORS['console_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 8px; padding: 16px; "
+            "font-family: 'Segoe UI', 'Arial', sans-serif; "
+            "font-size: 10pt; "
+            f"selection-background-color: {COLORS['primary']};")
+        self._editor.setHtml(note_html)
+        layout.addWidget(self._editor, 1)
+        layout.setContentsMargins(16, 0, 16, 0)
+        self._editor.document().setModified(False)
+        self._editor.textChanged.connect(self._update_char_count)
+        self._update_char_count()
+
+        # ── Upload button ────────────────────────────────────────
+        self._upload_btn = QPushButton()
+        self._upload_btn.setCursor(Qt.PointingHandCursor)
+        self._upload_btn.setFixedHeight(48)
+        self._upload_btn.clicked.connect(self._on_upload_clicked)
+        layout.addWidget(self._upload_btn)
+        self._update_upload_button()
+
+        # ── Secondary buttons row ────────────────────────────────
+        btn_bar = QHBoxLayout()
+        btn_bar.setContentsMargins(0, 4, 0, 8)
+        btn_bar.setSpacing(8)
+        btn_bar.addStretch()
+
+        self._copy_btn = QPushButton("Copy HTML")
+        self._copy_btn.setObjectName("secondary")
+        self._copy_btn.setCursor(Qt.PointingHandCursor)
+        self._copy_btn.clicked.connect(self._on_copy)
+        btn_bar.addWidget(self._copy_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("secondary")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.reject)
+        btn_bar.addWidget(close_btn)
+
+        layout.addLayout(btn_bar)
+
+    # ── HTML extraction ──────────────────────────────────────────
+
+    def _extract_html(self):
+        """Get clean HTML suitable for RepairDesk from the editor."""
+        if not self._editor.document().isModified():
+            return self._original_html
+        return self._clean_qt_html(self._editor.toHtml())
+
+    @staticmethod
+    def _clean_qt_html(qt_html):
+        """Convert Qt's verbose toHtml() back to simple <strong>/<br> HTML.
+
+        Qt wraps content in a full HTML document with inline CSS.
+        RepairDesk just needs <strong> tags and <br> line breaks.
+        """
+        # Extract body content
+        body_m = re.search(r'<body[^>]*>(.*)</body>', qt_html, re.DOTALL)
+        html = body_m.group(1).strip() if body_m else qt_html
+
+        # Convert Qt's bold spans to <strong>
+        # Qt uses: <span style=" font-weight:700;">text</span>
+        html = re.sub(
+            r'<span\s+style="[^"]*font-weight:\s*(?:bold|[6-9]\d{2})[^"]*">'
+            r'(.*?)</span>',
+            r'<strong>\1</strong>', html, flags=re.DOTALL)
+
+        # Remove remaining span tags (keep their content)
+        html = re.sub(r'</?span[^>]*>', '', html)
+
+        # Convert paragraph breaks to <br>
+        html = re.sub(r'</p>\s*<p[^>]*>', '<br>', html)
+
+        # Remove opening/closing <p> tags
+        html = re.sub(r'<p[^>]*>', '', html)
+        html = re.sub(r'</p>', '', html)
+
+        # Normalise consecutive <br> tags
+        html = re.sub(r'(<br\s*/?\s*>){3,}', '<br><br>', html)
+
+        # Strip leading/trailing whitespace and <br>
+        html = html.strip()
+        while html.startswith('<br>'):
+            html = html[4:].lstrip()
+        while html.endswith('<br>'):
+            html = html[:-4].rstrip()
+
+        return html
+
+    # ── UI callbacks ─────────────────────────────────────────────
+
+    def _on_ticket_changed(self, text):
+        self._update_upload_button()
+
+    def _on_fields_changed(self, text):
+        self._update_upload_button()
+
+    def _update_upload_button(self):
+        """Update the upload button text and style based on current state."""
+        has_key = is_configured()
+        has_ticket = len(self._ticket_input.text().strip()) > 0
+        btn_style = "border: none; border-radius: 8px; font-weight: bold; font-size: 14px;"
+
+        if not has_key:
+            self._upload_btn.setText("Configure API Key to Upload")
+            self._upload_btn.setEnabled(True)
+            self._upload_btn.setStyleSheet(
+                f"background-color: #0C8C62; color: #FFFFFF; {btn_style}")
+        elif not has_ticket:
+            self._upload_btn.setText("Enter ticket number to upload")
+            self._upload_btn.setEnabled(False)
+            self._upload_btn.setStyleSheet(
+                f"background-color: #0C8C62; color: #A8D8C0; {btn_style}")
+        else:
+            self._upload_btn.setText("Upload to RepairDesk")
+            self._upload_btn.setEnabled(True)
+            self._upload_btn.setStyleSheet(
+                f"background-color: {COLORS['primary']}; color: #FFFFFF; {btn_style}")
+
+    def _update_char_count(self):
+        count = len(self._editor.toPlainText())
+        self._info_label.setText(f"{count:,} characters")
+
+    def _on_copy(self):
+        html = self._extract_html()
+        QApplication.clipboard().setText(html)
+        self._copy_btn.setText("\u2713 Copied!")
+        QTimer.singleShot(2000, lambda: self._copy_btn.setText("Copy HTML"))
+
+    def _on_upload_clicked(self):
+        if not is_configured():
+            dlg = WelcomeDialog()
+            dlg.exec()
+            self._update_upload_button()
+            return
+
+        ticket_text = self._ticket_input.text().strip()
+        if not ticket_text:
+            return
+        if ticket_text.upper().startswith('T-'):
+            ticket_text = ticket_text[2:]
+        self.ticket_id = ticket_text
+
+        # Save tech name for next time
+        self.tech_name = self._name_input.text().strip()
+        if self.tech_name:
+            s = load_settings()
+            s['last_tech_name'] = self.tech_name
+            save_settings(s)
+
+        # Collect tech notes
+        self.tech_notes = self._notes_input.toPlainText().strip()
+
+        # Report body already contains the formatted header (report type, diagnosed by, etc.)
+        # Do not prepend anything extra — the formatter owns the header
+        self.edited_html = self._extract_html()
+        self.accept()
+
+
+# ─── Scan Summary Dialog ─────────────────────────────────────────────
+
+class ScanSummaryDialog(QDialog):
+    """
+    Post-scan popup showing critical issues found.
+    Shown automatically after scan completes — gives tech an immediate heads-up.
+    If no issues found, shows an all-clear message.
+    """
+
+    def __init__(self, issues, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Scan Complete — Summary")
+        self.setFixedSize(480, min(120 + len(issues) * 36, 480))
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # ── Header ────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(48)
+        has_issues = len(issues) > 0
+        header_color = COLORS.get('error', '#EF4444') if has_issues else COLORS.get('success', '#10B981')
+        header.setStyleSheet(f"background-color: {header_color};")
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(20, 0, 20, 0)
+        icon = "⚠ " if has_issues else "✓ "
+        title_text = f"{icon}{'Critical Issues Found' if has_issues else 'All Clear'}"
+        title = QLabel(title_text)
+        title.setStyleSheet(
+            "color: #FFFFFF; font-size: 14px; font-weight: bold;")
+        h_lay.addWidget(title)
+        layout.addWidget(header)
+
+        # ── Body ──────────────────────────────────────────────────
+        body = QVBoxLayout()
+        body.setContentsMargins(24, 18, 24, 18)
+        body.setSpacing(8)
+
+        if has_issues:
+            for issue in issues:
+                row = QLabel(f"• {issue}")
+                row.setStyleSheet(
+                    f"color: {COLORS['text_primary']}; font-size: 12px;")
+                row.setWordWrap(True)
+                body.addWidget(row)
+        else:
+            ok = QLabel("No critical issues detected. System appears healthy.")
+            ok.setStyleSheet(
+                f"color: {COLORS['text_primary']}; font-size: 12px;")
+            ok.setWordWrap(True)
+            body.addWidget(ok)
+
+        body.addSpacing(8)
+
+        # OK button
+        btn = QPushButton("OK — Proceed to Upload")
+        btn.setObjectName("primary")
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setFixedHeight(40)
+        btn.clicked.connect(self.accept)
+        body.addWidget(btn)
+
+        layout.addLayout(body)
+
+
+
+# ─── Settings Dialog ─────────────────────────────────────────────────
+
+class SettingsDialog(QDialog):
+    """Settings dialog: API key, URL, test connection, save/cancel."""
+
+    def __init__(self, current_settings=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} \u2014 Settings")
+        self.setMinimumSize(520, 560)
+        self.resize(520, 620)
+
+        self._settings = current_settings or load_settings()
+        self.saved_settings = None  # set on save
+
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # ── Header ────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(60)
+        header.setStyleSheet(f"background-color: {COLORS['header_bg']};")
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(24, 0, 24, 0)
+
+        title = QLabel("Settings")
+        title.setStyleSheet(
+            f"color: {COLORS['header_text']}; font-size: 16px; "
+            f"font-weight: bold;")
+        h_layout.addWidget(title)
+        layout.addWidget(header)
+
+        # ── Body (scrollable so Manage Techs card is always reachable) ──
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet(
+            f"QScrollArea {{ background-color: {COLORS['bg_root']}; border: none; }}"
+            f"QScrollBar:vertical {{ background: {COLORS['bg_root']}; width: 8px; }}"
+            f"QScrollBar::handle:vertical {{ background: {COLORS['card_border']}; border-radius: 4px; }}"
+        )
+
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(24, 16, 24, 16)
+        body_layout.setSpacing(12)
+
+        # API card
+        card = QWidget()
+        card.setStyleSheet(
+            f"background-color: {COLORS['card_bg']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            f"border-radius: 12px;")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(8)
+
+        card_title = QLabel("RepairDesk API")
+        card_title.setStyleSheet(
+            f"font-size: 11pt; font-weight: bold; "
+            f"color: {COLORS['text_primary']}; border: none;")
+        card_layout.addWidget(card_title)
+
+        # Store name row
+        store_row = QHBoxLayout()
+        store_row.setSpacing(8)
+        store_lbl = QLabel("Store Name:")
+        store_lbl.setFixedWidth(80)
+        store_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        store_row.addWidget(store_lbl)
+
+        self._store_input = QLineEdit()
+        self._store_input.setText(self._settings.get('store_name', ''))
+        self._store_input.setPlaceholderText("Your shop name")
+        store_row.addWidget(self._store_input)
+        card_layout.addLayout(store_row)
+
+        # API Key row
+        key_row = QHBoxLayout()
+        key_row.setSpacing(8)
+        key_lbl = QLabel("API Key:")
+        key_lbl.setFixedWidth(80)
+        key_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        key_row.addWidget(key_lbl)
+
+        self._api_key_input = QLineEdit()
+        self._api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key_input.setText(self._settings.get('api_key', ''))
+        key_row.addWidget(self._api_key_input)
+
+        self._show_key_cb = QCheckBox("Show")
+        self._show_key_cb.setStyleSheet(f"border: none;")
+        self._show_key_cb.toggled.connect(self._toggle_key_visibility)
+        key_row.addWidget(self._show_key_cb)
+        card_layout.addLayout(key_row)
+
+        # URL row
+        url_row = QHBoxLayout()
+        url_row.setSpacing(8)
+        url_lbl = QLabel("API URL:")
+        url_lbl.setFixedWidth(80)
+        url_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        url_row.addWidget(url_lbl)
+
+        self._url_input = QLineEdit()
+        self._url_input.setText(
+            self._settings.get('api_base_url', DEFAULTS['api_base_url']))
+        url_row.addWidget(self._url_input)
+        card_layout.addLayout(url_row)
+
+        # Test connection row
+        test_row = QHBoxLayout()
+        test_row.setSpacing(8)
+
+        test_btn = QPushButton("Test Connection")
+        test_btn.setObjectName("secondary")
+        test_btn.setCursor(Qt.PointingHandCursor)
+        test_btn.clicked.connect(self._test_connection)
+        test_row.addWidget(test_btn)
+
+        self._test_status = QLabel()
+        self._test_status.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        test_row.addWidget(self._test_status)
+        test_row.addStretch()
+        card_layout.addLayout(test_row)
+
+        body_layout.addWidget(card)
+
+        # Help text
+        help_lbl = QLabel(
+            "Settings are saved next to the exe on your USB.\n"
+            "RepairDesk API key: Settings \u2192 Integrations \u2192 API "
+            "in your RD account.")
+        help_lbl.setObjectName("hint")
+        help_lbl.setWordWrap(True)
+        body_layout.addWidget(help_lbl)
+
+        # ── WiFi Settings Card ────────────────────────────────────
+        wifi_card = QWidget()
+        wifi_card.setObjectName("card")
+        wifi_layout = QVBoxLayout(wifi_card)
+        wifi_layout.setContentsMargins(16, 12, 16, 12)
+        wifi_layout.setSpacing(8)
+
+        wifi_title = QLabel("Shop WiFi (Auto-Connect)")
+        wifi_title.setStyleSheet(
+            f"font-weight: bold; color: {COLORS['text_primary']}; border: none;")
+        wifi_layout.addWidget(wifi_title)
+
+        # SSID row
+        ssid_row = QHBoxLayout()
+        ssid_row.setSpacing(8)
+        ssid_lbl = QLabel("SSID:")
+        ssid_lbl.setFixedWidth(80)
+        ssid_lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; border: none;")
+        ssid_row.addWidget(ssid_lbl)
+        self._wifi_ssid_input = QLineEdit()
+        self._wifi_ssid_input.setPlaceholderText("WiFi network name")
+        self._wifi_ssid_input.setText(self._settings.get('wifi_ssid', ''))
+        ssid_row.addWidget(self._wifi_ssid_input)
+        wifi_layout.addLayout(ssid_row)
+
+        # Password row
+        pass_row = QHBoxLayout()
+        pass_row.setSpacing(8)
+        pass_lbl = QLabel("Password:")
+        pass_lbl.setFixedWidth(80)
+        pass_lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; border: none;")
+        pass_row.addWidget(pass_lbl)
+        self._wifi_pass_input = QLineEdit()
+        self._wifi_pass_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._wifi_pass_input.setPlaceholderText("WiFi password")
+        self._wifi_pass_input.setText(self._settings.get('wifi_password', ''))
+        pass_row.addWidget(self._wifi_pass_input)
+        self._show_wifi_cb = QCheckBox("Show")
+        self._show_wifi_cb.setStyleSheet("border: none;")
+        self._show_wifi_cb.toggled.connect(
+            lambda checked: self._wifi_pass_input.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password))
+        pass_row.addWidget(self._show_wifi_cb)
+        wifi_layout.addLayout(pass_row)
+
+        body_layout.addWidget(wifi_card)
+
+        # ── Technicians Card ──────────────────────────────────────
+        # Inline name fields — up to 5 techs, no dialog needed
+        techs_card = QWidget()
+        techs_card.setStyleSheet(
+            f"background-color: {COLORS['card_bg']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 12px;")
+        techs_layout = QVBoxLayout(techs_card)
+        techs_layout.setContentsMargins(16, 14, 16, 14)
+        techs_layout.setSpacing(8)
+
+        techs_title = QLabel("Technicians")
+        techs_title.setStyleSheet(
+            f"font-size: 11pt; font-weight: bold; "
+            f"color: {COLORS['text_primary']}; border: none;")
+        techs_layout.addWidget(techs_title)
+
+        techs_hint = QLabel("Add tech names to track who ran each scan (up to 5).")
+        techs_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt; border: none;")
+        techs_layout.addWidget(techs_hint)
+
+        _field_style = (
+            f"background-color: {COLORS['console_bg']}; "
+            f"color: {COLORS['console_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 6px; padding: 5px 10px; font-size: 10pt;"
+        )
+        existing_names = [t.get('name', '') for t in get_technicians()]
+        self._tech_name_fields = []
+        for i in range(5):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            lbl = QLabel(f"{i + 1}.")
+            lbl.setFixedWidth(18)
+            lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; border: none;")
+            row.addWidget(lbl)
+            field = QLineEdit()
+            field.setPlaceholderText(f"Tech {i + 1} name")
+            field.setFixedHeight(32)
+            field.setStyleSheet(_field_style)
+            if i < len(existing_names):
+                field.setText(existing_names[i])
+            row.addWidget(field)
+            self._tech_name_fields.append(field)
+            techs_layout.addLayout(row)
+
+        body_layout.addWidget(techs_card)
+
+        body_layout.addStretch()
+
+        # Version label
+        from settings import APP_VERSION
+        version_lbl = QLabel(f"Version {APP_VERSION}")
+        version_lbl.setStyleSheet(
+            f"color: {COLORS['text_tertiary']}; font-size: 9pt; border: none;")
+        version_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body_layout.addWidget(version_lbl)
+
+        scroll_area.setWidget(body)
+        layout.addWidget(scroll_area, 1)
+
+        # ── Button bar ────────────────────────────────────────────
+        btn_bar = QHBoxLayout()
+        btn_bar.setContentsMargins(24, 0, 24, 20)
+        btn_bar.setSpacing(8)
+        btn_bar.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("secondary")
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.clicked.connect(self.reject)
+        btn_bar.addWidget(cancel_btn)
+
+        save_btn = QPushButton("Save")
+        save_btn.setObjectName("primary")
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.clicked.connect(self._on_save)
+        btn_bar.addWidget(save_btn)
+
+        layout.addLayout(btn_bar)
+
+    def _toggle_key_visibility(self, checked):
+        self._api_key_input.setEchoMode(
+            QLineEdit.EchoMode.Normal if checked
+            else QLineEdit.EchoMode.Password)
+
+    def _test_connection(self):
+        self._test_status.setText("Testing...")
+        self._test_status.setStyleSheet(
+            f"color: {COLORS['warning']}; border: none;")
+        QApplication.processEvents()
+
+        key = self._api_key_input.text().strip()
+        url = self._url_input.text().strip()
+        if not key:
+            self._test_status.setText("No API key entered")
+            self._test_status.setStyleSheet(
+                f"color: {COLORS['error']}; border: none;")
+            return
+
+        api = RepairDeskAPI(api_key=key, base_url=url)
+        ok, msg = api.test_connection()
+        color = COLORS['success'] if ok else COLORS['error']
+        self._test_status.setText(msg)
+        self._test_status.setStyleSheet(
+            f"color: {color}; border: none;")
+
+    def _on_save(self):
+        self.saved_settings = {
+            'store_name': self._store_input.text().strip(),
+            'api_key': self._api_key_input.text().strip(),
+            'api_base_url': (self._url_input.text().strip()
+                             or DEFAULTS['api_base_url']),
+            'tickets_per_page': self._settings.get(
+                'tickets_per_page', DEFAULTS['tickets_per_page']),
+            'wifi_ssid': self._wifi_ssid_input.text().strip(),
+            'wifi_password': self._wifi_pass_input.text().strip(),
+            'wifi_auto_connect': True,
+            # Save technician names from inline fields (empty fields ignored)
+            'technicians': [{'name': f.text().strip()}
+                            for f in self._tech_name_fields if f.text().strip()],
+            'last_tech_name': self._settings.get('last_tech_name', ''),
+        }
+        save_settings(self.saved_settings)
+        logging.info("Settings saved and applied")
+        self.accept()
+
+
+# ─── CPU Stress Test Progress Dialog ────────────────────────────────
+
+class StressTestDialog(QDialog):
+    """
+    Modal dialog shown during the CPU load temperature test.
+
+    - Shows ramp phase (fans spinning up) then measurement phase
+    - Displays a countdown progress bar
+    - Shows live temperature samples as they arrive
+    - Auto-closes when the test finishes
+    - Cannot be closed manually during the test
+    """
+
+    def __init__(self, duration_sec: int = 20, ramp_sec: int = 10, parent=None):
+        super().__init__(parent)
+        self._duration = duration_sec
+        self._ramp = ramp_sec
+        self._total = ramp_sec + duration_sec
+        self._elapsed = 0
+        self._finished = False
+        self._in_ramp = True
+
+        self.setWindowTitle("CPU Stress Test")
+        self.setFixedSize(420, 300)
+        self.setModal(True)
+        self.setWindowFlags(
+            Qt.Dialog |
+            Qt.CustomizeWindowHint |
+            Qt.WindowTitleHint
+        )
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ── Header ────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(48)
+        header.setStyleSheet(f"background-color: {COLORS['header_bg']};")
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(20, 0, 20, 0)
+        self._header_lbl = QLabel("🌀 Ramping Up — Fans Spinning Up")
+        self._header_lbl.setStyleSheet(
+            f"color: {COLORS['header_text']}; font-size: 13px; font-weight: bold;")
+        h_lay.addWidget(self._header_lbl)
+        outer.addWidget(header)
+
+        # ── Body ──────────────────────────────────────────────────
+        body = QVBoxLayout()
+        body.setContentsMargins(24, 20, 24, 20)
+        body.setSpacing(14)
+
+        self._info_lbl = QLabel(
+            f"Gradually increasing CPU load over {ramp_sec}s so fans can spin up, "
+            f"then measuring peak temperature for {duration_sec}s. Please wait..."
+        )
+        self._info_lbl.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px;")
+        self._info_lbl.setWordWrap(True)
+        body.addWidget(self._info_lbl)
+
+        # Progress bar
+        self._progress = QProgressBar()
+        self._progress.setRange(0, self._total)
+        self._progress.setValue(0)
+        self._progress.setTextVisible(False)
+        self._progress.setFixedHeight(10)
+        self._update_progress_style(ramp=True)
+        body.addWidget(self._progress)
+
+        # Phase + countdown label
+        self._countdown_lbl = QLabel(f"Ramp: {ramp_sec}s remaining")
+        self._countdown_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        body.addWidget(self._countdown_lbl)
+
+        # Live temp label
+        self._temp_lbl = QLabel("CPU Temperature: reading…")
+        self._temp_lbl.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: bold;")
+        body.addWidget(self._temp_lbl)
+
+        # Warning note
+        note = QLabel("⚠ Test will abort automatically if temperature exceeds 100°C")
+        note.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px;")
+        note.setWordWrap(True)
+        body.addWidget(note)
+
+        body.addStretch()
+        outer.addLayout(body)
+
+        # ── Tick timer ────────────────────────────────────────────
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+
+    def _update_progress_style(self, ramp: bool):
+        color = "#F59E0B" if ramp else COLORS.get('accent', '#10B981')
+        self._progress.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {COLORS['card_bg']};
+                border-radius: 5px;
+                border: none;
+            }}
+            QProgressBar::chunk {{
+                background-color: {color};
+                border-radius: 5px;
+            }}
+        """)
+
+    def _tick(self):
+        """Advance the progress bar each second."""
+        self._elapsed += 1
+        self._progress.setValue(self._elapsed)
+
+        if self._elapsed <= self._ramp:
+            remaining = self._ramp - self._elapsed
+            self._countdown_lbl.setText(f"Ramp phase: {remaining}s remaining")
+        else:
+            if self._in_ramp:
+                # Transition to measurement phase
+                self._in_ramp = False
+                self._header_lbl.setText("🔥 Measuring Peak Temperature")
+                self._update_progress_style(ramp=False)
+            remaining = max(0, self._total - self._elapsed)
+            self._countdown_lbl.setText(f"Measuring: {remaining}s remaining")
+
+        if self._elapsed >= self._total:
+            self._timer.stop()
+
+    def update_temp(self, temp_c: float):
+        """Called by the worker each time a new temp sample arrives."""
+        if temp_c < 75:
+            color = COLORS['success']
+        elif temp_c < 90:
+            color = COLORS['warning']
+        else:
+            color = COLORS['error']
+        self._temp_lbl.setText(f"CPU Temperature: {temp_c:.0f}°C")
+        self._temp_lbl.setStyleSheet(
+            f"color: {color}; font-size: 13px; font-weight: bold;")
+
+    def finish(self):
+        """Call when the stress test is complete — closes the dialog."""
+        self._finished = True
+        self._timer.stop()
+        self.accept()
+
+    def closeEvent(self, event):
+        """Prevent manual close during test."""
+        if self._finished:
+            event.accept()
+        else:
+            event.ignore()
+
+
+# =============================================================================
+# ManageTechsDialog — Add / remove technicians and their API keys
+# =============================================================================
+
+class ManageTechsDialog(QDialog):
+    """
+    Dialog for managing the technician roster.
+    Each tech has a display name and a RepairDesk API key.
+    The list is persisted to settings.json on the USB stick.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Manage Technicians")
+        self.setMinimumWidth(540)
+        self.setMinimumHeight(420)
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']}; color: {COLORS['text_primary']};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        # ── Header ────────────────────────────────────────────────
+        hdr = QLabel("Technician Roster")
+        hdr.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 13pt; font-weight: bold;"
+        )
+        layout.addWidget(hdr)
+
+        sub = QLabel(
+            "Add technician names to track who ran each scan. "
+            "RepairDesk uses a single store API key — notes post under your store account regardless."
+        )
+        sub.setWordWrap(True)
+        sub.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 9pt;")
+        layout.addWidget(sub)
+
+        # ── Tech list (scrollable) ────────────────────────────────
+        self._list_widget = QListWidget()
+        self._list_widget.setStyleSheet(
+            f"background-color: {COLORS['console_bg']}; "
+            f"color: {COLORS['console_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 6px; "
+            "font-size: 10pt;"
+        )
+        self._list_widget.setSelectionMode(QListWidget.SingleSelection)
+        layout.addWidget(self._list_widget, 1)
+
+        # ── Add / Remove buttons ──────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_style = (
+            f"background-color: {COLORS['button_bg']}; "
+            f"color: {COLORS['button_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 6px; padding: 6px 16px; font-size: 9pt;"
+        )
+        self._add_btn = QPushButton("+ Add Technician")
+        self._add_btn.setStyleSheet(btn_style)
+        self._add_btn.clicked.connect(self._add_tech)
+        btn_row.addWidget(self._add_btn)
+
+        self._edit_btn = QPushButton("✏ Edit")
+        self._edit_btn.setStyleSheet(btn_style)
+        self._edit_btn.clicked.connect(self._edit_tech)
+        btn_row.addWidget(self._edit_btn)
+
+        self._remove_btn = QPushButton("🗑 Remove")
+        self._remove_btn.setStyleSheet(
+            f"background-color: {COLORS['button_bg']}; "
+            f"color: {COLORS['error']}; "
+            f"border: 1px solid {COLORS['error']}; "
+            "border-radius: 6px; padding: 6px 16px; font-size: 9pt;"
+        )
+        self._remove_btn.clicked.connect(self._remove_tech)
+        btn_row.addWidget(self._remove_btn)
+
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # ── Close ─────────────────────────────────────────────────
+        close_btn = QPushButton("Done")
+        close_btn.setFixedHeight(36)
+        close_btn.setStyleSheet(
+            f"background-color: {COLORS['success']}; color: #fff; "
+            "border: none; border-radius: 6px; font-size: 10pt; font-weight: bold;"
+        )
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+        self._load_list()
+
+    # ── Internal helpers ──────────────────────────────────────────
+
+    def _load_list(self):
+        self._list_widget.clear()
+        for tech in get_technicians():
+            name = tech.get('name', '')
+            item = QListWidgetItem(f"  {name}")
+            item.setData(Qt.UserRole, tech)
+            self._list_widget.addItem(item)
+
+    def _add_tech(self):
+        dlg = _TechEditDialog(parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            techs = get_technicians()
+            # Prevent duplicate names
+            if any(t['name'] == dlg.tech_name for t in techs):
+                box = _make_msgbox(self, "Duplicate Name",
+                                   f"A technician named '{dlg.tech_name}' already exists.")
+                box.exec()
+                return
+            techs.append({'name': dlg.tech_name})
+            save_technicians(techs)
+            self._load_list()
+
+    def _edit_tech(self):
+        item = self._list_widget.currentItem()
+        if not item:
+            return
+        tech = item.data(Qt.UserRole)
+        dlg = _TechEditDialog(parent=self, prefill_name=tech.get('name', ''))
+        if dlg.exec() == QDialog.Accepted:
+            techs = get_technicians()
+            for t in techs:
+                if t['name'] == tech['name']:
+                    t['name'] = dlg.tech_name
+                    break
+            save_technicians(techs)
+            self._load_list()
+
+    def _remove_tech(self):
+        item = self._list_widget.currentItem()
+        if not item:
+            return
+        tech = item.data(Qt.UserRole)
+        name = tech.get('name', '')
+        box = _make_msgbox(self, "Remove Technician",
+                           f"Remove '{name}' from the roster?",
+                           buttons=QMessageBox.Yes | QMessageBox.No,
+                           default=QMessageBox.No)
+        if box.exec() == QMessageBox.StandardButton.Yes.value:
+            techs = [t for t in get_technicians() if t['name'] != name]
+            save_technicians(techs)
+            self._load_list()
+
+
+# =============================================================================
+# _TechEditDialog — small inline dialog for name + API key entry
+# =============================================================================
+
+class _TechEditDialog(QDialog):
+    def __init__(self, parent=None, prefill_name=''):
+        super().__init__(parent)
+        self.setWindowTitle("Add / Edit Technician")
+        self.setFixedSize(380, 180)
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']}; color: {COLORS['text_primary']};")
+
+        self.tech_name = ''
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        input_style = (
+            f"background-color: {COLORS['console_bg']}; "
+            f"color: {COLORS['console_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 6px; padding: 6px 10px; font-size: 10pt;"
+        )
+        lbl_style = f"color: {COLORS['text_secondary']}; font-size: 9pt; font-weight: bold;"
+
+        layout.addWidget(_lbl := QLabel("Technician Name"))
+        _lbl.setStyleSheet(lbl_style)
+        self._name_edit = QLineEdit(prefill_name)
+        self._name_edit.setPlaceholderText("e.g. Jake")
+        self._name_edit.setFixedHeight(36)
+        self._name_edit.setStyleSheet(input_style)
+        layout.addWidget(self._name_edit)
+
+        layout.addStretch()
+
+        btn_row = QHBoxLayout()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(34)
+        cancel_btn.setStyleSheet(
+            f"background-color: {COLORS['button_bg']}; color: {COLORS['text_secondary']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 6px; font-size: 9pt;"
+        )
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        save_btn = QPushButton("Save")
+        save_btn.setFixedHeight(34)
+        save_btn.setStyleSheet(
+            f"background-color: {COLORS['success']}; color: #fff; "
+            "border: none; border-radius: 6px; font-size: 10pt; font-weight: bold;"
+        )
+        save_btn.clicked.connect(self._on_save)
+        btn_row.addWidget(save_btn)
+        layout.addLayout(btn_row)
+
+    def _on_save(self):
+        name = self._name_edit.text().strip()
+        if not name:
+            box = _make_msgbox(self, "Missing Name", "Please enter a technician name.")
+            box.exec()
+            return
+        self.tech_name = name
+        self.api_key = key
+        self.accept()

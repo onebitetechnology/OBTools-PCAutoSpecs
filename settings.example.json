@@ -1,0 +1,16 @@
+{
+  "api_key": "REPLACE_WITH_REPAIRDESK_API_KEY",
+  "store_name": "Your Store Name",
+  "api_base_url": "https://api.repairdesk.co/api/web/v1",
+  "tickets_per_page": 100,
+  "wifi_ssid": "YourGuestWifi",
+  "wifi_password": "REPLACE_WITH_WIFI_PASSWORD",
+  "wifi_auto_connect": true,
+  "technicians": [
+    {
+      "name": "Jeff",
+      "api_key": "OPTIONAL_TECH_SPECIFIC_API_KEY"
+    }
+  ],
+  "last_tech_name": ""
+}
