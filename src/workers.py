@@ -161,3 +161,40 @@ class GpuMonitorWorker(QThread):
     def stop(self):
         self._running = False
         self.wait(3000)
+
+
+class UpdateCheckWorker(QThread):
+    """Check GitHub Releases for a newer packaged installer."""
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def run(self):
+        try:
+            from updater import check_for_updates
+            self.finished.emit(check_for_updates())
+        except Exception as e:
+            logging.error(f"Update check failed: {e}", exc_info=True)
+            self.error.emit(str(e))
+
+
+class UpdateDownloadWorker(QThread):
+    """Download the latest Windows installer in the background."""
+    progress = Signal(int, str)   # (percent, message)
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, update_info, parent=None):
+        super().__init__(parent)
+        self.update_info = update_info
+
+    def run(self):
+        try:
+            from updater import download_update
+            result = download_update(
+                self.update_info,
+                progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
+            )
+            self.finished.emit(result)
+        except Exception as e:
+            logging.error(f"Update download failed: {e}", exc_info=True)
+            self.error.emit(str(e))

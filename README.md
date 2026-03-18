@@ -62,8 +62,9 @@ PCAutoSpec/
 - GPU temperature monitoring via nvidia-smi (NVIDIA cards)
 - Disk speed benchmarks (sequential read/write)
 - Formats everything into a clean diagnostic note and uploads it to your RepairDesk ticket
+- Can check for newer installer releases from GitHub and download/apply updates from Settings
 
----
+--- 
 
 ## Getting Your RepairDesk API Key
 
@@ -168,8 +169,8 @@ Before publishing:
 
 1. Copy `settings.example.json` to `settings.json` locally and add your real credentials there.
 2. Do not commit `settings.json`, `logs/`, `python/`, or `vendor/`.
-3. If you want automated builds, the repo includes `.github/workflows/windows-release.yml`.
-4. Tag a release like `v2.2.6` to trigger the Windows build workflow on GitHub Actions.
+3. The repo includes `.github/workflows/windows-release.yml` and builds on every push to `main`.
+4. Tags like `v2.2.8` publish GitHub Release assets for the in-app updater to download.
 
 ---
 

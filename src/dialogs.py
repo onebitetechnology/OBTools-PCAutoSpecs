@@ -26,6 +26,8 @@ from settings import (
     get_technicians,
 )
 from repairdesk_api import RepairDeskAPI
+from updater import get_pending_update, launch_pending_update
+from workers import UpdateCheckWorker, UpdateDownloadWorker
 
 
 
@@ -1344,6 +1346,18 @@ class SettingsDialog(QDialog):
 
         self._settings = current_settings or load_settings()
         self.saved_settings = None  # set on save
+        self._update_info = {
+            'supported': False,
+            'current_version': APP_VERSION,
+            'latest_version': None,
+            'available': False,
+            'downloaded': False,
+            'message': 'Update checks are idle.',
+            'installer_path': None,
+            'release_notes': '',
+        }
+        self._check_worker = None
+        self._download_worker = None
 
         self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
 
@@ -1522,6 +1536,88 @@ class SettingsDialog(QDialog):
 
         body_layout.addWidget(wifi_card)
 
+        # ── App Updates Card ─────────────────────────────────────
+        updates_card = QWidget()
+        updates_card.setStyleSheet(
+            f"background-color: {COLORS['card_bg']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 12px;")
+        updates_layout = QVBoxLayout(updates_card)
+        updates_layout.setContentsMargins(16, 14, 16, 14)
+        updates_layout.setSpacing(8)
+
+        updates_title = QLabel("App Updates")
+        updates_title.setStyleSheet(
+            f"font-size: 11pt; font-weight: bold; "
+            f"color: {COLORS['text_primary']}; border: none;")
+        updates_layout.addWidget(updates_title)
+
+        version_row = QHBoxLayout()
+        version_row.setSpacing(8)
+        version_lbl = QLabel("Current Version:")
+        version_lbl.setFixedWidth(110)
+        version_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        version_row.addWidget(version_lbl)
+        self._update_current_version = QLabel(APP_VERSION)
+        self._update_current_version.setStyleSheet(
+            f"color: {COLORS['text_primary']}; border: none;")
+        version_row.addWidget(self._update_current_version)
+        version_row.addStretch()
+        updates_layout.addLayout(version_row)
+
+        latest_row = QHBoxLayout()
+        latest_row.setSpacing(8)
+        latest_lbl = QLabel("Latest Version:")
+        latest_lbl.setFixedWidth(110)
+        latest_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        latest_row.addWidget(latest_lbl)
+        self._update_latest_version = QLabel("Not checked yet")
+        self._update_latest_version.setStyleSheet(
+            f"color: {COLORS['text_primary']}; border: none;")
+        latest_row.addWidget(self._update_latest_version)
+        latest_row.addStretch()
+        updates_layout.addLayout(latest_row)
+
+        self._update_status = QLabel("Update checks are idle.")
+        self._update_status.setWordWrap(True)
+        self._update_status.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        updates_layout.addWidget(self._update_status)
+
+        self._update_progress = QProgressBar()
+        self._update_progress.setRange(0, 100)
+        self._update_progress.setValue(0)
+        self._update_progress.setTextVisible(True)
+        self._update_progress.hide()
+        updates_layout.addWidget(self._update_progress)
+
+        btns_row = QHBoxLayout()
+        btns_row.setSpacing(8)
+
+        self._check_updates_btn = QPushButton("Check for Updates")
+        self._check_updates_btn.setObjectName("secondary")
+        self._check_updates_btn.setCursor(Qt.PointingHandCursor)
+        self._check_updates_btn.clicked.connect(self._on_check_updates)
+        btns_row.addWidget(self._check_updates_btn)
+
+        self._download_update_btn = QPushButton("Download Update")
+        self._download_update_btn.setObjectName("secondary")
+        self._download_update_btn.setCursor(Qt.PointingHandCursor)
+        self._download_update_btn.setEnabled(False)
+        self._download_update_btn.clicked.connect(self._on_download_update)
+        btns_row.addWidget(self._download_update_btn)
+
+        self._install_update_btn = QPushButton("Install Update Now")
+        self._install_update_btn.setObjectName("primary")
+        self._install_update_btn.setCursor(Qt.PointingHandCursor)
+        self._install_update_btn.setEnabled(False)
+        self._install_update_btn.clicked.connect(self._on_install_update)
+        btns_row.addWidget(self._install_update_btn)
+
+        updates_layout.addLayout(btns_row)
+        body_layout.addWidget(updates_card)
+
         # ── Technicians Card ──────────────────────────────────────
         # Inline name fields — up to 5 techs, no dialog needed
         techs_card = QWidget()
@@ -1573,12 +1669,11 @@ class SettingsDialog(QDialog):
         body_layout.addStretch()
 
         # Version label
-        from settings import APP_VERSION
-        version_lbl = QLabel(f"Version {APP_VERSION}")
-        version_lbl.setStyleSheet(
+        footer_version_lbl = QLabel(f"Version {APP_VERSION}")
+        footer_version_lbl.setStyleSheet(
             f"color: {COLORS['text_tertiary']}; font-size: 9pt; border: none;")
-        version_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        body_layout.addWidget(version_lbl)
+        footer_version_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body_layout.addWidget(footer_version_lbl)
 
         scroll_area.setWidget(body)
         layout.addWidget(scroll_area, 1)
@@ -1602,6 +1697,7 @@ class SettingsDialog(QDialog):
         btn_bar.addWidget(save_btn)
 
         layout.addLayout(btn_bar)
+        self._load_pending_update_state()
 
     def _toggle_key_visibility(self, checked):
         self._api_key_input.setEchoMode(
@@ -1628,6 +1724,155 @@ class SettingsDialog(QDialog):
         self._test_status.setText(msg)
         self._test_status.setStyleSheet(
             f"color: {color}; border: none;")
+
+    def _set_update_status(self, message, color=None):
+        color = color or COLORS['text_secondary']
+        self._update_status.setText(message)
+        self._update_status.setStyleSheet(
+            f"color: {color}; border: none;")
+
+    def _refresh_update_buttons(self):
+        supported = self._update_info.get('supported', False)
+        available = self._update_info.get('available', False)
+        downloaded = self._update_info.get('downloaded', False)
+        has_download_url = bool(self._update_info.get('download_url'))
+
+        self._check_updates_btn.setEnabled(
+            self._check_worker is None and self._download_worker is None
+        )
+        self._download_update_btn.setEnabled(
+            supported and available and has_download_url and not downloaded and self._download_worker is None
+        )
+        self._install_update_btn.setEnabled(
+            supported and downloaded and bool(self._update_info.get('installer_path'))
+        )
+
+    def _load_pending_update_state(self):
+        pending = get_pending_update()
+        if pending:
+            self._update_info.update({
+                'supported': True,
+                'available': True,
+                'downloaded': True,
+                'latest_version': pending.get('version'),
+                'installer_path': pending.get('installer_path'),
+                'message': (
+                    f"Update {pending.get('version')} has already been downloaded. "
+                    "Use Install Update Now to apply it."
+                ),
+            })
+            self._update_latest_version.setText(str(pending.get('version', 'Unknown')))
+            self._set_update_status(self._update_info['message'], COLORS['success'])
+            self._update_progress.show()
+            self._update_progress.setValue(100)
+        self._refresh_update_buttons()
+
+    def _on_check_updates(self):
+        self._update_progress.hide()
+        self._update_progress.setValue(0)
+        self._set_update_status("Checking for updates...", COLORS['warning'])
+        self._update_latest_version.setText("Checking...")
+        self._check_updates_btn.setEnabled(False)
+
+        self._check_worker = UpdateCheckWorker(self)
+        self._check_worker.finished.connect(self._on_update_check_finished)
+        self._check_worker.error.connect(self._on_update_check_error)
+        self._check_worker.start()
+
+    def _on_update_check_finished(self, info):
+        self._check_worker = None
+        self._update_info.update(info)
+        latest_version = info.get('latest_version') or "Not available"
+        self._update_latest_version.setText(str(latest_version))
+
+        if info.get('downloaded'):
+            self._update_progress.show()
+            self._update_progress.setValue(100)
+            self._set_update_status(info.get('message', ''), COLORS['success'])
+        elif info.get('available'):
+            self._update_progress.hide()
+            self._set_update_status(info.get('message', ''), COLORS['warning'])
+        elif info.get('supported'):
+            self._update_progress.hide()
+            self._set_update_status(info.get('message', ''), COLORS['success'])
+        else:
+            self._update_progress.hide()
+            self._set_update_status(info.get('message', ''), COLORS['warning'])
+
+        self._refresh_update_buttons()
+
+    def _on_update_check_error(self, message):
+        self._check_worker = None
+        self._update_progress.hide()
+        self._set_update_status(f"Update check failed: {message}", COLORS['error'])
+        self._refresh_update_buttons()
+
+    def _on_download_update(self):
+        if not self._update_info.get('available'):
+            return
+
+        self._update_progress.show()
+        self._update_progress.setValue(0)
+        self._set_update_status("Preparing update download...", COLORS['warning'])
+        self._refresh_update_buttons()
+
+        self._download_worker = UpdateDownloadWorker(dict(self._update_info), self)
+        self._download_worker.progress.connect(self._on_update_download_progress)
+        self._download_worker.finished.connect(self._on_update_download_finished)
+        self._download_worker.error.connect(self._on_update_download_error)
+        self._download_worker.start()
+
+    def _on_update_download_progress(self, percent, message):
+        self._update_progress.show()
+        self._update_progress.setValue(percent)
+        self._set_update_status(message, COLORS['warning'])
+
+    def _on_update_download_finished(self, result):
+        self._download_worker = None
+        self._update_info.update({
+            'downloaded': True,
+            'installer_path': result.get('installer_path'),
+            'latest_version': result.get('version') or self._update_info.get('latest_version'),
+            'message': result.get('message', 'Update downloaded.'),
+        })
+        self._update_latest_version.setText(str(self._update_info.get('latest_version') or "Unknown"))
+        self._update_progress.show()
+        self._update_progress.setValue(100)
+        self._set_update_status(self._update_info['message'], COLORS['success'])
+        self._refresh_update_buttons()
+
+    def _on_update_download_error(self, message):
+        self._download_worker = None
+        self._update_progress.hide()
+        self._set_update_status(f"Update download failed: {message}", COLORS['error'])
+        self._refresh_update_buttons()
+
+    def _on_install_update(self):
+        installer_path = self._update_info.get('installer_path')
+        if not installer_path:
+            return
+
+        box = _make_msgbox(
+            self,
+            "Install Update",
+            "The downloaded installer will open after PC AutoSpec closes.\n\n"
+            "Save any work first, then continue.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if box.exec() != int(QMessageBox.StandardButton.Yes):
+            return
+
+        try:
+            launch_pending_update(installer_path)
+        except Exception as e:
+            self._set_update_status(f"Could not launch installer: {e}", COLORS['error'])
+            return
+
+        self.accept()
+        app = QApplication.instance()
+        if app:
+            app.quit()
 
     def _on_save(self):
         self.saved_settings = {

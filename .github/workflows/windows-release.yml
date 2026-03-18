@@ -3,6 +3,8 @@ name: Windows Release
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -33,6 +35,24 @@ jobs:
       - name: Build installer
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\PCAutoSpec.iss"
+
+      - name: Create portable ZIP
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          if (Test-Path "release\PCAutoSpec-portable.zip") {
+            Remove-Item "release\PCAutoSpec-portable.zip" -Force
+          }
+          Compress-Archive -Path "dist\PCAutoSpec\*" -DestinationPath "release\PCAutoSpec-portable.zip"
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/PCAutoSpec-Setup.exe
+            release/PCAutoSpec-portable.zip
 
       - name: Upload PyInstaller bundle
         uses: actions/upload-artifact@v4
