@@ -3,7 +3,10 @@
 from pathlib import Path
 
 
-project_root = Path(__file__).resolve().parent
+# PyInstaller executes spec files via ``exec()``, so ``__file__`` is not set.
+# ``SPECPATH`` is provided by PyInstaller and points at the directory
+# containing this spec file.
+project_root = Path(globals().get("SPECPATH", Path.cwd())).resolve()
 block_cipher = None
 
 datas = [
