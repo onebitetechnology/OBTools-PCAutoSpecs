@@ -2825,7 +2825,6 @@ def _get_storage_info(com_wmi):
                 continue
         
         # Get physical drive info from COM/WMI for additional context (model, type)
-        physical_drives = {}
         if com_wmi:
             try:
                 items = _query_com_wmi(com_wmi, "Win32_DiskDrive")
@@ -2835,9 +2834,12 @@ def _get_storage_info(com_wmi):
                         size = disk.Properties_("Size").Value
                         if size and int(size) > 0:
                             size_gb = round(int(size) / (1024**3), 2)
+                            disk_index = disk.Properties_("Index").Value
                             model = disk.Properties_("Model").Value or "Unknown"
                             media_type = disk.Properties_("MediaType").Value or "Unknown"
                             interface = disk.Properties_("InterfaceType").Value or "Unknown"
+                            bus_type = _get_disk_bus_type(disk_index)
+                            friendly_type = _classify_basic_drive_type(model, media_type, interface, bus_type)
                             
                             # Match physical drive to logical drives by size (approximate)
                             for drive_letter, drive_info in drive_info_map.items():
@@ -2846,6 +2848,8 @@ def _get_storage_info(com_wmi):
                                         drive_info['model'] = model
                                         drive_info['media_type'] = media_type
                                         drive_info['interface'] = interface
+                                        drive_info['bus_type'] = bus_type
+                                        drive_info['friendly_type'] = friendly_type
                                     break
             except Exception as e:
                 logging.debug(f"Could not get physical drive info: {e}")
@@ -2858,7 +2862,9 @@ def _get_storage_info(com_wmi):
             # Add physical drive info if available
             if 'model' in info and info['model'] != "Unknown":
                 line += f" - {info['model']}"
-            if 'media_type' in info and info['media_type'] not in ["Unknown", ""]:
+            if 'friendly_type' in info and info['friendly_type']:
+                line += f" ({info['friendly_type']})"
+            elif 'media_type' in info and info['media_type'] not in ["Unknown", ""]:
                 line += f" ({info['media_type']})"
             
             storage_details.append(line)
@@ -2869,6 +2875,55 @@ def _get_storage_info(com_wmi):
     except Exception as e:
         logging.warning(f"Failed to get storage info: {e}")
         return "Storage information unavailable"
+
+
+def _get_disk_bus_type(disk_index):
+    """Best-effort Windows bus type lookup for a physical disk index."""
+    if platform.system() != "Windows" or disk_index is None:
+        return None
+
+    try:
+        ps_script = f'''
+        $bus = (Get-Disk -Number {disk_index} -ErrorAction SilentlyContinue).BusType
+        if ($bus) {{ Write-Output $bus }}
+        '''
+        result = subprocess.run(
+            [_POWERSHELL_EXE, "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception as e:
+        logging.debug(f"Failed to get bus type for disk {disk_index}: {e}")
+    return None
+
+
+def _classify_basic_drive_type(model, media_type, interface, bus_type):
+    """Classify drive type for overview text, independent of SMART availability."""
+    model_upper = (model or "").upper()
+    media_upper = (media_type or "").upper()
+    interface_upper = (interface or "").upper()
+    bus_upper = (bus_type or "").upper()
+
+    if bus_upper == "NVME":
+        return "NVMe SSD"
+    if bus_upper == "USB":
+        return "USB"
+    if bus_upper == "SATA" and ("SSD" in model_upper or "SSD" in media_upper):
+        return "SATA SSD"
+    if bus_upper == "SATA" and ("HDD" in media_upper or "HARD DISK" in media_upper):
+        return "HDD"
+
+    if "NVME" in model_upper or "NVM" in model_upper or "NVME" in interface_upper:
+        return "NVMe SSD"
+    if "SSD" in model_upper or "SSD" in media_upper:
+        return "SATA SSD"
+    if "HDD" in media_upper or "HARD DISK" in media_upper:
+        return "HDD"
+    return None
 
 
 def _get_network_info(com_wmi):

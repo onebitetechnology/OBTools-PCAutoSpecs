@@ -264,10 +264,10 @@ class ReportFormatter:
             for line in storage_text.split('\n'):
                 line = line.strip()
                 if line:
-                    drive_type = self._classify_drive_type_from_storage_health(
+                    drive_type = None if self._line_already_has_drive_type(line) else self._classify_drive_type_from_storage_health(
                         line, storage_health
                     )
-                    if not drive_type:
+                    if not drive_type and not self._line_already_has_drive_type(line):
                         drive_type = self._classify_drive_type_from_line(line)
                     if drive_type:
                         line += f" ({drive_type})"
@@ -338,6 +338,11 @@ class ReportFormatter:
             if model and model.upper() in storage_upper:
                 return self._classify_drive_type(drive)
         return None
+
+    @staticmethod
+    def _line_already_has_drive_type(line):
+        upper = (line or '').upper()
+        return any(label in upper for label in ('NVME SSD', 'SATA SSD', 'USB', 'HDD'))
 
     # ────────────────────────────────────────────────────────────────────
     # RepairDesk note sections
