@@ -203,14 +203,6 @@ class MainWindow(QMainWindow):
 
         h_layout.addStretch()
 
-        self._job_btn = QPushButton("Job")
-        self._job_btn.setObjectName("secondary")
-        self._job_btn.setFixedSize(72, 40)
-        self._job_btn.setCursor(Qt.PointingHandCursor)
-        self._job_btn.setToolTip("Open Job Setup")
-        self._job_btn.clicked.connect(self._open_job_setup)
-        h_layout.addWidget(self._job_btn)
-
         settings_btn = QPushButton("\u2699")
         settings_btn.setObjectName("flat")
         settings_btn.setFixedSize(40, 40)
@@ -255,6 +247,7 @@ class MainWindow(QMainWindow):
 
         # ── Signal wiring ─────────────────────────────────────────
         self._info_panel.preview_requested.connect(self._on_preview)
+        self._info_panel.job_setup_requested.connect(self._open_job_setup)
 
 
         # ── Defer all startup work until after event loop begins ────
@@ -569,9 +562,9 @@ class MainWindow(QMainWindow):
                 self._info_panel.show_scan_skipped()
                 self._info_panel.set_button_enabled(False)
                 self._info_panel.set_button_text("Scan Summary / Upload")
-                self._status_bar.showMessage("Scan skipped — use Job to start later")
+                self._status_bar.showMessage("Scan skipped — use Job Setup to start later")
                 self._log_panel.append(
-                    "  Scan skipped — use Job to enter details and start later.\n",
+                    "  Scan skipped — use Job Setup to enter details and start later.\n",
                     'warning')
             else:
                 logging.info("Job setup dismissed — not starting a scan")
@@ -599,7 +592,7 @@ class MainWindow(QMainWindow):
     def _start_spec_collection(self):
         logging.info("Starting system specifications collection")
         self._scan_in_progress = True
-        self._job_btn.setEnabled(False)
+        self._info_panel.set_job_button_enabled(False)
         if self._gpu_worker:
             self._gpu_worker.stop()
             self._gpu_worker = None
@@ -647,7 +640,7 @@ class MainWindow(QMainWindow):
 
     def _on_specs_collected(self, specs):
         self._scan_in_progress = False
-        self._job_btn.setEnabled(True)
+        self._info_panel.set_job_button_enabled(True)
         self._system_specs = specs
         self._info_panel.spinner.stop()
         self._info_panel.update_from_specs(specs)
@@ -674,13 +667,13 @@ class MainWindow(QMainWindow):
 
     def _on_specs_error(self, error_msg):
         self._scan_in_progress = False
-        self._job_btn.setEnabled(True)
+        self._info_panel.set_job_button_enabled(True)
         self._info_panel.spinner.stop()
         self._info_panel.set_button_enabled(False)
         self._info_panel.set_button_text("Scan Summary / Upload")
         self._log_panel.append(
             f"  \u2717 Error collecting specs: {error_msg}\n\n", 'error')
-        self._status_bar.showMessage("Error collecting specs — use Job to retry")
+        self._status_bar.showMessage("Error collecting specs — use Job Setup to retry")
 
     # ── GPU monitoring ────────────────────────────────────────────
 

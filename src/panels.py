@@ -135,9 +135,10 @@ class ActivityLogPanel(QWidget):
 # ─── System Info Panel ────────────────────────────────────────────────
 
 class SystemInfoPanel(QWidget):
-    """Left-side panel: hardware sections and action button."""
+    """Left-side panel: hardware sections and action buttons."""
 
     preview_requested = Signal()           # user clicked "Upload to RepairDesk"
+    job_setup_requested = Signal()         # user clicked "Job Setup"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -168,16 +169,27 @@ class SystemInfoPanel(QWidget):
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll, 1)
 
-        # ── Action button ─────────────────────────────────────────
+        # ── Action buttons ────────────────────────────────────────
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+
+        self._job_btn = QPushButton("Job Setup")
+        self._job_btn.setObjectName("secondary")
+        self._job_btn.setCursor(Qt.PointingHandCursor)
+        self._job_btn.setFixedHeight(48)
+        self._job_btn.clicked.connect(self.job_setup_requested.emit)
+        action_row.addWidget(self._job_btn)
+
         self._action_btn = QPushButton("Scan Summary / Upload")
         self._action_btn.setObjectName("primary")
         self._action_btn.setEnabled(False)
         self._action_btn.setCursor(Qt.PointingHandCursor)
         self._action_btn.setFixedHeight(48)
         self._action_btn.clicked.connect(self.preview_requested.emit)
-        self._action_btn.setContentsMargins(0, 8, 0, 0)
+        action_row.addWidget(self._action_btn, 1)
+
         outer.addSpacing(12)
-        outer.addWidget(self._action_btn)
+        outer.addLayout(action_row)
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -201,6 +213,9 @@ class SystemInfoPanel(QWidget):
             self._action_btn.setStyleSheet(
                 f"background-color: #444444; color: #888888;"
                 f"{btn_base}")
+
+    def set_job_button_enabled(self, enabled):
+        self._job_btn.setEnabled(enabled)
 
     def show_scan_skipped(self):
         """Render all sections in a clear idle state after the tech skips scanning."""
