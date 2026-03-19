@@ -674,9 +674,11 @@ class MainWindow(QMainWindow):
         self._scan_in_progress = False
         self._job_btn.setEnabled(True)
         self._info_panel.spinner.stop()
+        self._info_panel.set_button_enabled(False)
+        self._info_panel.set_button_text("Scan Summary / Upload")
         self._log_panel.append(
             f"  \u2717 Error collecting specs: {error_msg}\n\n", 'error')
-        self._status_bar.showMessage("Error collecting specs")
+        self._status_bar.showMessage("Error collecting specs — use Job to retry")
 
     # ── GPU monitoring ────────────────────────────────────────────
 

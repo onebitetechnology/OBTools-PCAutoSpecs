@@ -441,6 +441,9 @@ class SystemInfoPanel(QWidget):
         sec.clear_dynamic()
 
         cpu_full = specs.get('CPU', 'Unknown')
+        if cpu_full == 'Test skipped':
+            sec.set_row_value('cpu', 'Test skipped', COLORS['warning'])
+            return
         cpu_name_match = re.match(r'^(.*?)\s*(?:\|\s*Base:|$)', cpu_full)
         cpu_name = cpu_name_match.group(1).strip() if cpu_name_match else cpu_full
         sec.set_row_value('cpu', cpu_name)
@@ -528,7 +531,12 @@ class SystemInfoPanel(QWidget):
         sec = self._sec_ram
         sec.clear_dynamic()
 
-        sec.set_row_value('ram', specs.get('RAM', 'Unknown'))
+        ram_value = specs.get('RAM', 'Unknown')
+        if ram_value == 'Test skipped':
+            sec.set_row_value('ram', 'Test skipped', COLORS['warning'])
+            return
+
+        sec.set_row_value('ram', ram_value)
 
         for module in specs.get('RAMDetails', []):
             slot = module.get('slot', 'Unknown')
@@ -559,6 +567,9 @@ class SystemInfoPanel(QWidget):
         sec.clear_dynamic()
 
         gpu_full = specs.get('GPU', 'Unknown')
+        if gpu_full == 'Test skipped':
+            sec.set_row_value('gpu', 'Test skipped', COLORS['warning'])
+            return
         gpu_name_match = re.match(r'^(.*?)\s*(?:\(|-).*', gpu_full)
         gpu_name = gpu_name_match.group(1).strip() if gpu_name_match else gpu_full
         sec.set_row_value('gpu', gpu_name)
@@ -1061,8 +1072,12 @@ class SystemInfoPanel(QWidget):
         sec = self._sec_battery
         sec.clear_dynamic()
 
-        sec.set_row_value('battery_status',
-                          specs.get('Battery', 'Unknown'))
+        battery_value = specs.get('Battery', 'Unknown')
+        if battery_value == 'Test skipped':
+            sec.set_row_value('battery_status', 'Test skipped', COLORS['warning'])
+            return
+
+        sec.set_row_value('battery_status', battery_value)
 
         bd = specs.get('BatteryDetails')
         if not bd or not isinstance(bd, dict):

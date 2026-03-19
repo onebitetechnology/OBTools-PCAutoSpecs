@@ -381,6 +381,8 @@ def get_system_specs(log_callback=None, progress_callback=None, spec_callback=No
 
 def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=None, skip_categories=None):
     """Get Windows-specific system specifications using COM/WMI (pure Python)"""
+    import re
+
     specs = {}
     skip = skip_categories or set()
 
