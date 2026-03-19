@@ -681,6 +681,11 @@ class SystemInfoPanel(QWidget):
         storage_info = specs.get('Storage', 'Unknown')
         storage_health = specs.get('StorageHealth', [])
 
+        if storage_info == 'Test skipped':
+            sec.add_info_row('Status', 'Test skipped', bold=True,
+                             color=COLORS['warning'])
+            return
+
         # Parse storage lines
         storage_lines = []
         if storage_info and isinstance(storage_info, str):
@@ -838,6 +843,10 @@ class SystemInfoPanel(QWidget):
         sec.clear_dynamic()
 
         network_info = specs.get('Network', 'Unknown')
+        if network_info == 'Test skipped':
+            sec.add_info_row('Status', 'Test skipped', bold=True,
+                             color=COLORS['warning'])
+            return
         if not isinstance(network_info, str) or network_info in (
                 'Unknown', 'No network adapters found',
                 'Network information unavailable'):
@@ -921,6 +930,10 @@ class SystemInfoPanel(QWidget):
         sec.clear_dynamic()
 
         display_info = specs.get('Display', 'Unknown')
+        if display_info == 'Test skipped':
+            sec.add_info_row('Status', 'Test skipped', bold=True,
+                             color=COLORS['warning'])
+            return
         system_type = specs.get('SystemType', 'Unknown')
         screen_size = specs.get('ScreenSize')
         panel_details = specs.get('PanelDetails')

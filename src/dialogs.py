@@ -1345,8 +1345,8 @@ class SettingsDialog(QDialog):
     def __init__(self, current_settings=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} \u2014 Settings")
-        self.setMinimumSize(520, 560)
-        self.resize(520, 620)
+        self.setMinimumSize(700, 560)
+        self.resize(740, 680)
 
         self._settings = current_settings or load_settings()
         self.saved_settings = None  # set on save

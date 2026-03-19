@@ -35,6 +35,11 @@ _WMI_IMPORT_ATTEMPTED = False
 _WMI_MODULE = None
 
 
+def _can_auto_install_vendor_deps() -> bool:
+    """Allow one-time pip installs only when running from source, not a frozen app."""
+    return not getattr(_sys, 'frozen', False)
+
+
 def _import_wmi():
     """Import the optional ``wmi`` package once and reuse the result."""
     global _WMI_IMPORT_ATTEMPTED, _WMI_MODULE
@@ -471,6 +476,9 @@ def _collect_gpu_temp_nvml() -> Optional[Dict[str, Any]]:
     try:
         return _try_nvml()
     except ImportError:
+        if not _can_auto_install_vendor_deps():
+            logging.debug("Skipping pynvml auto-install in frozen build")
+            return None
         # Auto-install pynvml to vendor/ (one-time setup)
         try:
             import subprocess
@@ -865,6 +873,9 @@ def collect_gpu_temp_under_load(
         import pyopencl as cl
         import numpy as np
     except ImportError:
+        if not _can_auto_install_vendor_deps():
+            _log("  pyopencl not available in packaged build — skipping GPU stress install attempt\n")
+            return {"status": "unavailable", "reason": "pyopencl not available in packaged build"}
         _log("  pyopencl not found — installing now (one-time setup)...\n")
         try:
             import subprocess, sys
@@ -1868,6 +1879,13 @@ def collect_webcam_info() -> Dict[str, Any]:
         import cv2
         opencv_available = True
     except ImportError:
+        if not _can_auto_install_vendor_deps():
+            return {
+                "status": "unavailable",
+                "reason": "opencv not available in packaged build",
+                "camera_count": len(cameras),
+                "cameras": cameras,
+            }
         # Try to auto-install opencv-python-headless (small, no GUI deps)
         try:
             import subprocess as _sp
@@ -1977,6 +1995,11 @@ def collect_advanced_health_summary(
         checks = [(k, l, f, t) for k, l, f, t in checks if k != 'webcam']
         results['webcam'] = {'status': 'skipped'}
 
+    # Skip idle temperature sampling if CPU, GPU, and RAM categories are all skipped.
+    if {'cpu', 'gpu', 'ram'}.issubset(skip):
+        checks = [(k, l, f, t) for k, l, f, t in checks if k != 'temperatures']
+        results['temperatures'] = {'status': 'skipped'}
+
     for key, label, func, timeout in checks:
         _log(f"  Checking {label}...")
         results[key] = _run_with_timeout(func, timeout, label)
@@ -2023,17 +2046,21 @@ def collect_advanced_health_summary(
             results['cpu_load_temp'] = {"status": "unavailable", "reason": str(e)}
 
     # Memory temp — DDR5 exposes sensors via LHM, DDR4 usually doesn't
-    _log("  Checking memory temperature...")
-    try:
-        mem_temp = _collect_memory_temp_lhm()
-        results['memory_temp_c'] = mem_temp  # None if unavailable
-        if mem_temp:
-            _log(f"  Memory temp: {mem_temp:.0f}\u00b0C\n")
-        else:
-            _log("  Memory temp: not available (DDR4 or sensor not exposed)\n")
-    except Exception as e:
-        logging.warning(f"Memory temp failed: {e}")
-        results['memory_temp_c'] = None
+    if 'ram' in skip:
+        results['memory_temp_c'] = {'status': 'skipped'}
+        _log("  Memory temp: skipped\n")
+    else:
+        _log("  Checking memory temperature...")
+        try:
+            mem_temp = _collect_memory_temp_lhm()
+            results['memory_temp_c'] = mem_temp  # None if unavailable
+            if mem_temp:
+                _log(f"  Memory temp: {mem_temp:.0f}\u00b0C\n")
+            else:
+                _log("  Memory temp: not available (DDR4 or sensor not exposed)\n")
+        except Exception as e:
+            logging.warning(f"Memory temp failed: {e}")
+            results['memory_temp_c'] = None
 
     # GPU stress test — skip if gpu category skipped
     if 'gpu' in skip:

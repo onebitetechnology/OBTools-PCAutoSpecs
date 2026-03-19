@@ -289,20 +289,22 @@ class ReportFormatter:
     def _get_critical_issues_list(self, specs) -> list:
         """Return just the list of critical issue strings — used by the scan summary popup."""
         issues = []
+        skip_cats = specs.get('_job_skip_cats', set())
 
         # Storage
-        storage_health = specs.get('StorageHealth', [])
-        for drive in storage_health:
-            model = drive.get('model', 'Unknown Drive')
-            if 'USB' in model.upper():
-                continue
-            smart_assessment = assess_smart_status(drive, model)
-            if smart_assessment['severity'] in ['WARN', 'CAUTION', 'CRITICAL']:
-                status_label = smart_assessment['label']
-                if drive.get('health_percent'):
-                    issues.append(f"Storage Health: {model} — {status_label} ({drive['health_percent']:.0f}% health)")
-                else:
-                    issues.append(f"Storage Health: {model} — {status_label}")
+        if 'storage' not in skip_cats:
+            storage_health = specs.get('StorageHealth', [])
+            for drive in storage_health:
+                model = drive.get('model', 'Unknown Drive')
+                if 'USB' in model.upper():
+                    continue
+                smart_assessment = assess_smart_status(drive, model)
+                if smart_assessment['severity'] in ['WARN', 'CAUTION', 'CRITICAL']:
+                    status_label = smart_assessment['label']
+                    if drive.get('health_percent'):
+                        issues.append(f"Storage Health: {model} — {status_label} ({drive['health_percent']:.0f}% health)")
+                    else:
+                        issues.append(f"Storage Health: {model} — {status_label}")
 
         # Device Manager
         device_errors = specs.get('DeviceManagerErrors', [])
@@ -313,10 +315,10 @@ class ReportFormatter:
         system_health = specs.get('SystemHealth', '')
         if system_health:
             cpu_match = re.search(r'CPU Usage[:\s]+([\d.]+)%', system_health, re.IGNORECASE)
-            if cpu_match and float(cpu_match.group(1)) > 25:
+            if 'cpu' not in skip_cats and cpu_match and float(cpu_match.group(1)) > 25:
                 issues.append(f"CPU Usage: HIGH ({float(cpu_match.group(1)):.0f}% at idle)")
             ram_match = re.search(r'Memory Usage[:\s]+([\d.]+)%', system_health, re.IGNORECASE)
-            if ram_match and float(ram_match.group(1)) > 85:
+            if 'ram' not in skip_cats and ram_match and float(ram_match.group(1)) > 85:
                 issues.append(f"RAM Usage: HIGH ({float(ram_match.group(1)):.0f}%)")
 
         # Temperatures
@@ -324,9 +326,9 @@ class ReportFormatter:
         temps = advanced.get('temperatures', {})
         load = advanced.get('cpu_load_temp', {})
         idle_temp = temps.get('cpu_temp_c') if temps.get('status') == 'ok' else None
-        if idle_temp and idle_temp > 60:
+        if 'cpu' not in skip_cats and idle_temp and idle_temp > 60:
             issues.append(f"CPU Temp (Idle): HIGH ({idle_temp:.0f}\u00b0C \u2014 check thermal paste/cooling)")
-        if load.get('status') == 'ok' and load.get('peak_temp_c'):
+        if 'cpu' not in skip_cats and load.get('status') == 'ok' and load.get('peak_temp_c'):
             peak = load['peak_temp_c']
             if load.get('aborted'):
                 issues.append(f"CPU Temp (Load): CRITICAL \u2014 thermal limit hit at {peak:.0f}\u00b0C")
@@ -337,7 +339,7 @@ class ReportFormatter:
 
         # GPU load temp
         gpu_load = advanced.get('gpu_load_temp', {})
-        if gpu_load.get('status') == 'ok' and gpu_load.get('peak_temp_c'):
+        if 'gpu' not in skip_cats and gpu_load.get('status') == 'ok' and gpu_load.get('peak_temp_c'):
             gpu_peak = gpu_load['peak_temp_c']
             gpu_name = gpu_load.get('gpu_name', 'GPU')
             if gpu_load.get('aborted'):
@@ -347,27 +349,28 @@ class ReportFormatter:
 
         # Memory temp
         mem_temp = advanced.get('memory_temp_c')
-        if mem_temp and mem_temp > 50:
+        if 'ram' not in skip_cats and isinstance(mem_temp, (int, float)) and mem_temp > 50:
             issues.append(f"Memory Temp: HIGH ({mem_temp:.0f}\u00b0C \u2014 check airflow/cooling)")
 
         # MBR partition style warning (on boot drives only)
-        storage_health = specs.get('StorageHealth', [])
-        for i, drive in enumerate(storage_health):
-            if drive.get('status') == 'N/A':
-                continue
-            if drive.get('partition_style') == 'MBR':
-                model = drive.get('model', f'Drive {i+1}')
-                issues.append(
-                    f"Partition Style: {model} uses MBR — "
-                    f"legacy format, incompatible with Secure Boot and modern reinstalls"
-                )
-            elif drive.get('partition_style') == 'RAW':
-                model = drive.get('model', f'Drive {i+1}')
-                issues.append(f"Partition Style: {model} is RAW (unformatted or unrecognized)")
+        if 'storage' not in skip_cats:
+            storage_health = specs.get('StorageHealth', [])
+            for i, drive in enumerate(storage_health):
+                if drive.get('status') == 'N/A':
+                    continue
+                if drive.get('partition_style') == 'MBR':
+                    model = drive.get('model', f'Drive {i+1}')
+                    issues.append(
+                        f"Partition Style: {model} uses MBR — "
+                        f"legacy format, incompatible with Secure Boot and modern reinstalls"
+                    )
+                elif drive.get('partition_style') == 'RAW':
+                    model = drive.get('model', f'Drive {i+1}')
+                    issues.append(f"Partition Style: {model} is RAW (unformatted or unrecognized)")
 
         # Drive speed
         disk_speed = advanced.get('disk_speed', {})
-        if disk_speed.get('status') == 'ok':
+        if 'storage' not in skip_cats and disk_speed.get('status') == 'ok':
             read_mb = disk_speed.get('read_mb_s', 0)
             write_mb = disk_speed.get('write_mb_s', 0)
             if read_mb < 80 or write_mb < 50:
@@ -383,7 +386,9 @@ class ReportFormatter:
         wifi = advanced.get('wifi', {})
         wifi_status = wifi.get('status')
         is_laptop = str(specs.get('SystemType', '')).lower() in ('laptop', 'notebook', 'tablet')
-        if wifi_status == 'no_adapter':
+        if 'network' in skip_cats:
+            pass
+        elif wifi_status == 'no_adapter':
             if is_laptop:
                 issues.append("WiFi: No wireless adapter detected — unusual for a laptop")
         elif wifi_status == 'disconnected':
@@ -405,7 +410,7 @@ class ReportFormatter:
 
         # Webcam issues
         webcam = advanced.get('webcam', {})
-        if webcam.get('status') == 'detected_not_functional':
+        if 'display' not in skip_cats and webcam.get('status') == 'detected_not_functional':
             cams = webcam.get('cameras', [])
             cam_name = cams[0].get('name', 'Unknown') if cams else 'Unknown'
             issues.append(f"Webcam: Device detected but not responding — {cam_name}")
@@ -416,35 +421,37 @@ class ReportFormatter:
         """Detect and format critical issues - FIRST priority section using unified assessments"""
         lines = []
         issues = []
+        skip_cats = specs.get('_job_skip_cats', set())
 
         # Check storage health using unified assessment
-        storage_health = specs.get('StorageHealth', [])
-        for drive in storage_health:
-            model = drive.get('model', 'Unknown Drive')
+        if 'storage' not in skip_cats:
+            storage_health = specs.get('StorageHealth', [])
+            for drive in storage_health:
+                model = drive.get('model', 'Unknown Drive')
 
-            # Skip USB drives
-            if 'USB' in model.upper():
-                continue
+                # Skip USB drives
+                if 'USB' in model.upper():
+                    continue
 
-            # Use unified SMART assessment
-            smart_assessment = assess_smart_status(drive, model)
+                # Use unified SMART assessment
+                smart_assessment = assess_smart_status(drive, model)
 
-            # Flag WARN/CAUTION/CRITICAL severity issues
-            if smart_assessment['severity'] in ['WARN', 'CAUTION', 'CRITICAL']:
-                # Build consistent status line
-                status_label = smart_assessment['label']
+                # Flag WARN/CAUTION/CRITICAL severity issues
+                if smart_assessment['severity'] in ['WARN', 'CAUTION', 'CRITICAL']:
+                    # Build consistent status line
+                    status_label = smart_assessment['label']
 
-                # For "Failed" SMART reads, clarify
-                if status_label in ['Failed', 'Unknown']:
-                    status_desc = f"{status_label} SMART read"
-                else:
-                    # For Caution/Critical, include health %
-                    if drive.get('health_percent'):
-                        status_desc = f"{status_label} ({drive['health_percent']:.0f}% health)"
+                    # For "Failed" SMART reads, clarify
+                    if status_label in ['Failed', 'Unknown']:
+                        status_desc = f"{status_label} SMART read"
                     else:
-                        status_desc = status_label
+                        # For Caution/Critical, include health %
+                        if drive.get('health_percent'):
+                            status_desc = f"{status_label} ({drive['health_percent']:.0f}% health)"
+                        else:
+                            status_desc = status_label
 
-                issues.append(f"Storage Health: {model} - {status_desc}")
+                    issues.append(f"Storage Health: {model} - {status_desc}")
 
         # Check for Device Manager errors
         device_errors = specs.get('DeviceManagerErrors', [])
@@ -457,14 +464,14 @@ class ReportFormatter:
             cpu_match = re.search(r'CPU Usage[:\s]+([\d.]+)%', system_health, re.IGNORECASE)
             if cpu_match:
                 cpu_usage = float(cpu_match.group(1))
-                if cpu_usage > 25:
+                if 'cpu' not in skip_cats and cpu_usage > 25:
                     issues.append(f"CPU Usage: HIGH ({cpu_usage}% at idle - investigate malware)")
 
             # Check for high RAM usage
             ram_match = re.search(r'Memory Usage[:\s]+([\d.]+)%', system_health, re.IGNORECASE)
             if ram_match:
                 ram_usage = float(ram_match.group(1))
-                if ram_usage > 85:
+                if 'ram' not in skip_cats and ram_usage > 85:
                     issues.append(f"RAM Usage: HIGH ({ram_usage}% - low available memory)")
 
         # Check CPU temperatures
@@ -474,11 +481,11 @@ class ReportFormatter:
 
         # Idle temp warning: >60°C is concerning at idle
         idle_temp = temps.get('cpu_temp_c') if temps.get('status') == 'ok' else None
-        if idle_temp and idle_temp > 60:
+        if 'cpu' not in skip_cats and idle_temp and idle_temp > 60:
             issues.append(f"CPU Temp (Idle): HIGH ({idle_temp:.0f}°C — check thermal paste/cooling)")
 
         # Load temp: >90°C is concerning, thermal abort means it hit 100°C
-        if load.get('status') == 'ok' and load.get('peak_temp_c'):
+        if 'cpu' not in skip_cats and load.get('status') == 'ok' and load.get('peak_temp_c'):
             peak = load['peak_temp_c']
             if load.get('aborted'):
                 issues.append(f"CPU Temp (Load): CRITICAL — thermal limit hit at {peak:.0f}°C (urgent cooling service needed)")
@@ -498,6 +505,7 @@ class ReportFormatter:
         """Format hardware configuration section"""
         lines = []
         lines.append("<strong>Hardware Configuration</strong>")
+        skip_cats = specs.get('_job_skip_cats', set())
 
         # CPU - Parse from combined string
         cpu_raw = specs.get('CPU', 'Unknown CPU')
@@ -511,7 +519,7 @@ class ReportFormatter:
         lines.append(f"<strong>CPU:</strong> {cpu_model}")
 
         # Add CPU details if available
-        if cpu_details:
+        if cpu_raw != 'Test skipped' and cpu_details:
             generation = cpu_details.get('generation', '')
             if generation:
                 year = cpu_details.get('year', '')
@@ -561,7 +569,7 @@ class ReportFormatter:
 
             # Memory temp (DDR5 only — DDR4 usually not available)
             mem_temp = advanced.get('memory_temp_c')
-            if mem_temp:
+            if isinstance(mem_temp, (int, float)):
                 lines.append(f"<strong>Memory Temp:</strong> {mem_temp:.0f}\u00b0C")
 
             # GPU load temp
@@ -585,6 +593,8 @@ class ReportFormatter:
 
         # Parse RAM capacity and speed from string
         # Example: "63.93 GB DDR4 @ 3600MHz (4 modules) - 19.4% used, 51.5 GB available"
+        if ram_raw == 'Test skipped':
+            lines.append("<strong>RAM:</strong> Test skipped")
         ram_match = re.search(r'([\d.]+)\s*GB\s+(DDR\d+)\s*@\s*([\d]+MHz)', ram_raw)
         if ram_match:
             capacity = ram_match.group(1)
@@ -670,6 +680,9 @@ class ReportFormatter:
         gpu_model = gpu_model.strip(' |')
 
         lines.append(f"<strong>GPU:</strong> {gpu_model}")
+        if gpu_raw == 'Test skipped':
+            lines.append("")
+            return lines
         if vram:
             lines.append(f"<strong>VRAM:</strong> {vram} GB")
 
@@ -709,6 +722,12 @@ class ReportFormatter:
         """Format comprehensive storage health for ALL drives - matches Activity Log counts"""
         lines = []
         lines.append("<strong>Storage Health</strong>")
+        skip_cats = specs.get('_job_skip_cats', set())
+
+        if 'storage' in skip_cats or specs.get('Storage') == 'Test skipped':
+            lines.append("<strong>Status:</strong> Test skipped")
+            lines.append("")
+            return lines
 
         storage_health = specs.get('StorageHealth', [])
         if not storage_health:
@@ -890,9 +909,13 @@ class ReportFormatter:
     def _format_network_hardware(self, specs):
         """Format network hardware section — only emits if adapters are found"""
         content = []
+        skip_cats = specs.get('_job_skip_cats', set())
 
         network = specs.get('Network', '')
         network_drivers = specs.get('NetworkDrivers', [])
+
+        if 'network' in skip_cats or network == 'Test skipped':
+            return ["<strong>Network</strong>", "<strong>Status:</strong> Test skipped"]
 
         if network:
             # Network is stored as a newline-separated string, split it
@@ -967,6 +990,10 @@ class ReportFormatter:
     def _format_display_config(self, specs):
         """Format display configuration section — only emits if display data exists"""
         content = []
+        skip_cats = specs.get('_job_skip_cats', set())
+
+        if 'display' in skip_cats or specs.get('Display') == 'Test skipped':
+            return ["<strong>Display</strong>", "<strong>Status:</strong> Test skipped"]
 
         # Check if laptop (has panel details)
         panel_details = specs.get('PanelDetails', {})
@@ -1091,9 +1118,15 @@ class ReportFormatter:
         """Format battery information section for laptops"""
         lines = []
         lines.append("<strong>Battery</strong>")
+        skip_cats = specs.get('_job_skip_cats', set())
 
         battery_details = specs.get('BatteryDetails', {})
         battery_status = specs.get('Battery', 'Unknown')
+
+        if 'battery' in skip_cats or battery_status == 'Test skipped':
+            lines.append("<strong>Status:</strong> Test skipped")
+            lines.append("")
+            return lines
 
         if battery_details:
             # Battery Model and Manufacturer

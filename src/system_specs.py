@@ -369,7 +369,8 @@ def get_system_specs(log_callback=None, progress_callback=None, spec_callback=No
 
     system = platform.system()
     if system == "Windows":
-        specs = _get_windows_specs(log_callback, progress_callback, spec_callback)
+        specs = _get_windows_specs(
+            log_callback, progress_callback, spec_callback, skip_categories=skip_categories)
     elif system == "Darwin":
         specs = _get_macos_specs(progress_callback)
     else:
@@ -378,9 +379,10 @@ def get_system_specs(log_callback=None, progress_callback=None, spec_callback=No
     return specs
 
 
-def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=None):
+def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=None, skip_categories=None):
     """Get Windows-specific system specifications using COM/WMI (pure Python)"""
     specs = {}
+    skip = skip_categories or set()
 
     def log_message(message):
         """Log message to both callback (GUI) and regular logging"""
@@ -439,70 +441,91 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
         log_message(f" {specs['SystemType']}\n")
     _emit_specs()
 
-    # CPU - Enhanced with cores/threads (validated)
-    log_message("Detecting CPU...")
-    specs['CPU'] = _get_cpu_info(com_wmi)
-    if specs['CPU']:
-        # Extract just the CPU name without clocks/cores for cleaner log
-        import re
-        cpu_name = re.match(r'^(.*?)\s*(?:\||$)', specs['CPU']).group(1) if specs['CPU'] else specs['CPU']
-        log_message(f" {cpu_name}")
-        if specs.get('CPUDetails') and specs['CPUDetails'].get('generation'):
-            log_message(f" ({specs['CPUDetails']['generation']})")
-        log_message("\n")
-
-    # CPU Enhanced Details - Generation, architecture, socket, TDP, upgrade path (silent - already logged above)
-    specs['CPUDetails'] = _get_cpu_enhanced_details(specs.get('CPU', ''))
-    _emit_specs()
-
-    # RAM - Enhanced with usage (validated)
-    log_message("Detecting RAM...")
-    specs['RAM'] = _get_ram_info(com_wmi)
-    specs['RAMDetails'] = _get_ram_details(com_wmi)
-    if specs['RAM']:
-        # Extract total RAM size for log
-        import re
-        ram_match = re.match(r'^([\d\.]+ GB)', specs['RAM'])
-        if ram_match:
-            log_message(f" {ram_match.group(1)}")
-            if specs['RAMDetails']:
-                log_message(f" ({len(specs['RAMDetails'])} modules)")
-            log_message("\n")
-    
-    # RAM Slot Count - For empty slot detection and upsell opportunities
-    ram_slot_count = _get_ram_slot_count(com_wmi)
-    
-    # RAM Compatibility Analysis - Check for mismatches/issues
-    if specs.get('RAMDetails'):
-        specs['RAMCompatibilityWarnings'] = _analyze_ram_compatibility(
-            specs['RAMDetails'], 
-            cpu_name=specs.get('CPU', ''),
-            system_type='',  # Will add system type detection later
-            total_slots=ram_slot_count
-        )
+    cpu_name = ''
+    if 'cpu' in skip:
+        log_message("Skipping CPU tests...\n")
+        specs['CPU'] = 'Test skipped'
+        specs['CPUDetails'] = {}
+        _emit_specs()
     else:
+        # CPU - Enhanced with cores/threads (validated)
+        log_message("Detecting CPU...")
+        specs['CPU'] = _get_cpu_info(com_wmi)
+        if specs['CPU']:
+            # Extract just the CPU name without clocks/cores for cleaner log
+            import re
+            cpu_name = re.match(r'^(.*?)\s*(?:\||$)', specs['CPU']).group(1) if specs['CPU'] else specs['CPU']
+            log_message(f" {cpu_name}")
+            if specs.get('CPUDetails') and specs['CPUDetails'].get('generation'):
+                log_message(f" ({specs['CPUDetails']['generation']})")
+            log_message("\n")
+
+        # CPU Enhanced Details - Generation, architecture, socket, TDP, upgrade path (silent - already logged above)
+        specs['CPUDetails'] = _get_cpu_enhanced_details(specs.get('CPU', ''))
+        _emit_specs()
+
+    if 'ram' in skip:
+        log_message("Skipping RAM tests...\n")
+        specs['RAM'] = 'Test skipped'
+        specs['RAMDetails'] = []
         specs['RAMCompatibilityWarnings'] = []
-    _emit_specs()
+        _emit_specs()
+    else:
+        # RAM - Enhanced with usage (validated)
+        log_message("Detecting RAM...")
+        specs['RAM'] = _get_ram_info(com_wmi)
+        specs['RAMDetails'] = _get_ram_details(com_wmi)
+        if specs['RAM']:
+            # Extract total RAM size for log
+            import re
+            ram_match = re.match(r'^([\d\.]+ GB)', specs['RAM'])
+            if ram_match:
+                log_message(f" {ram_match.group(1)}")
+                if specs['RAMDetails']:
+                    log_message(f" ({len(specs['RAMDetails'])} modules)")
+                log_message("\n")
 
-    # GPU - Enhanced with VRAM and driver info (validated)
-    log_message("Detecting GPU...")
-    specs['GPU'] = _get_gpu_info(com_wmi)
-    if specs['GPU'] and specs['GPU'] != 'Unknown':
-        # Extract GPU name without VRAM/driver for log
-        import re
-        gpu_name = re.match(r'^(.*?)\s*(?:\(|$)', specs['GPU']).group(1) if specs['GPU'] else specs['GPU']
-        log_message(f" {gpu_name}\n")
+        # RAM Slot Count - For empty slot detection and upsell opportunities
+        ram_slot_count = _get_ram_slot_count(com_wmi)
 
-    # Build GPUDetails dict from the GPU string for report formatter
-    specs['GPUDetails'] = _parse_gpu_details(specs.get('GPU', ''))
+        # RAM Compatibility Analysis - Check for mismatches/issues
+        if specs.get('RAMDetails'):
+            specs['RAMCompatibilityWarnings'] = _analyze_ram_compatibility(
+                specs['RAMDetails'],
+                cpu_name=specs.get('CPU', ''),
+                system_type='',  # Will add system type detection later
+                total_slots=ram_slot_count
+            )
+        else:
+            specs['RAMCompatibilityWarnings'] = []
+        _emit_specs()
 
-    # GPU Detailed Metrics - Temperature, clocks, power, utilization (NVIDIA/AMD)
-    gpu_name = specs.get('GPU', '')
-    if gpu_name and gpu_name != 'Unknown':
-        gpu_metrics = _get_gpu_detailed_metrics(gpu_name)
-        if gpu_metrics:
-            specs['GPUMetrics'] = gpu_metrics
-    _emit_specs()
+    if 'gpu' in skip:
+        log_message("Skipping GPU tests...\n")
+        specs['GPU'] = 'Test skipped'
+        specs['GPUDetails'] = {}
+        specs['GPUMetrics'] = {}
+        _emit_specs()
+    else:
+        # GPU - Enhanced with VRAM and driver info (validated)
+        log_message("Detecting GPU...")
+        specs['GPU'] = _get_gpu_info(com_wmi)
+        if specs['GPU'] and specs['GPU'] != 'Unknown':
+            # Extract GPU name without VRAM/driver for log
+            import re
+            gpu_name = re.match(r'^(.*?)\s*(?:\(|$)', specs['GPU']).group(1) if specs['GPU'] else specs['GPU']
+            log_message(f" {gpu_name}\n")
+
+        # Build GPUDetails dict from the GPU string for report formatter
+        specs['GPUDetails'] = _parse_gpu_details(specs.get('GPU', ''))
+
+        # GPU Detailed Metrics - Temperature, clocks, power, utilization (NVIDIA/AMD)
+        gpu_name = specs.get('GPU', '')
+        if gpu_name and gpu_name != 'Unknown':
+            gpu_metrics = _get_gpu_detailed_metrics(gpu_name)
+            if gpu_metrics:
+                specs['GPUMetrics'] = gpu_metrics
+        _emit_specs()
 
     # Motherboard - Enhanced (validated)
     log_message("Detecting Motherboard...")
@@ -532,31 +555,50 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
     _emit_specs()
 
     # Battery - Enhanced with health (validated)
-    specs['Battery'] = _get_battery_status(com_wmi)
+    if 'battery' in skip:
+        specs['Battery'] = 'Test skipped'
+    else:
+        specs['Battery'] = _get_battery_status(com_wmi)
 
-    # Storage - Fixed duplication issue (validated)
-    log_message("Detecting Storage...")
-    specs['Storage'] = _get_storage_info(com_wmi)
-    if specs['Storage']:
-        drive_count = specs['Storage'].count('\n') + 1 if specs['Storage'] else 0
-        log_message(f" {drive_count} drive(s)\n")
-    _emit_specs()
+    if 'storage' in skip:
+        log_message("Skipping Storage tests...\n")
+        specs['Storage'] = 'Test skipped'
+        specs['StorageHealth'] = []
+        _emit_specs()
+    else:
+        # Storage - Fixed duplication issue (validated)
+        log_message("Detecting Storage...")
+        specs['Storage'] = _get_storage_info(com_wmi)
+        if specs['Storage']:
+            drive_count = specs['Storage'].count('\n') + 1 if specs['Storage'] else 0
+            log_message(f" {drive_count} drive(s)\n")
+        _emit_specs()
 
-    # Network Adapters - Enhanced (validated)
-    log_message("Detecting Network...")
-    specs['Network'] = _get_network_info(com_wmi)
-    if specs['Network']:
-        adapter_count = specs['Network'].count('\n') + 1 if specs['Network'] else 0
-        log_message(f" {adapter_count} adapter(s)\n")
-    _emit_specs()
+    if 'network' in skip:
+        log_message("Skipping Network tests...\n")
+        specs['Network'] = 'Test skipped'
+        _emit_specs()
+    else:
+        # Network Adapters - Enhanced (validated)
+        log_message("Detecting Network...")
+        specs['Network'] = _get_network_info(com_wmi)
+        if specs['Network']:
+            adapter_count = specs['Network'].count('\n') + 1 if specs['Network'] else 0
+            log_message(f" {adapter_count} adapter(s)\n")
+        _emit_specs()
 
-    # Display Information - Enhanced (validated)
-    log_message("Detecting Displays...")
-    specs['Display'] = _get_display_info(com_wmi)
-    if specs['Display'] and specs['Display'] != 'Display information unavailable':
-        display_lines = [l for l in specs['Display'].split('\n') if l.strip()]
-        log_message(f" {len(display_lines)} monitor(s)\n")
-    _emit_specs()
+    if 'display' in skip:
+        log_message("Skipping Display tests...\n")
+        specs['Display'] = 'Test skipped'
+        _emit_specs()
+    else:
+        # Display Information - Enhanced (validated)
+        log_message("Detecting Displays...")
+        specs['Display'] = _get_display_info(com_wmi)
+        if specs['Display'] and specs['Display'] != 'Display information unavailable':
+            display_lines = [l for l in specs['Display'].split('\n') if l.strip()]
+            log_message(f" {len(display_lines)} monitor(s)\n")
+        _emit_specs()
 
     # BIOS Information - Enhanced (validated) - returns (first_line, remaining_lines)
     log_message("Detecting BIOS...")
@@ -571,8 +613,11 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
     specs['Drivers'] = _get_driver_info(com_wmi)
 
     # Enhanced Storage with SMART Status (structured for GUI, validated)
-    log_message("Analyzing SMART data...")
-    specs['StorageHealth'] = _get_storage_health_structured(com_wmi)
+    if 'storage' in skip:
+        specs['StorageHealth'] = []
+    else:
+        log_message("Analyzing SMART data...")
+        specs['StorageHealth'] = _get_storage_health_structured(com_wmi)
     if specs['StorageHealth']:
         # Categorize drives: healthy, unhealthy, failed SMART, N/A (USB)
         # FIX: score is nested in interpretation dict, not top level
@@ -618,22 +663,30 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
 
     # Phase 2: Enhanced Diagnostics (validated)
     # Enhanced Battery Information (Laptops)
-    if specs.get('SystemType') == 'Laptop':
-        log_message("Analyzing battery...")
-    specs['BatteryDetails'] = _get_battery_details(com_wmi)
+    if 'battery' in skip:
+        specs['BatteryDetails'] = None
+    else:
+        if specs.get('SystemType') == 'Laptop':
+            log_message("Analyzing battery...")
+        specs['BatteryDetails'] = _get_battery_details(com_wmi)
 
     # Screen Size Detection (Laptops)
-    specs['ScreenSize'] = _get_screen_size(com_wmi)
-
-    # LCD Panel Details (Laptops) - Enhanced with manufacturer, model, year
-    if specs['SystemType'] == 'Laptop':
-        specs['PanelDetails'] = _get_panel_details()
-        if specs.get('BatteryDetails', {}).get('health_percent'):
-            log_message(f" {specs['BatteryDetails']['health_percent']}% health\n")
-        else:
-            log_message("\n")
-    else:
+    if 'display' in skip:
+        specs['ScreenSize'] = None
         specs['PanelDetails'] = None
+    else:
+        specs['ScreenSize'] = _get_screen_size(com_wmi)
+
+        # LCD Panel Details (Laptops) - Enhanced with manufacturer, model, year
+        if specs['SystemType'] == 'Laptop':
+            specs['PanelDetails'] = _get_panel_details()
+            battery_details = specs.get('BatteryDetails') or {}
+            if battery_details.get('health_percent'):
+                log_message(f" {battery_details['health_percent']}% health\n")
+            else:
+                log_message("\n")
+        else:
+            specs['PanelDetails'] = None
     _emit_specs()
 
     # Recent Critical Errors
