@@ -4,6 +4,7 @@ Main launcher script
 """
 import sys
 import os
+import multiprocessing
 from pathlib import Path
 
 
@@ -71,6 +72,7 @@ def elevate():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     setup_dll_directory()
 
     if not is_admin():

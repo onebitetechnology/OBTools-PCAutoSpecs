@@ -197,9 +197,8 @@ class ReportFormatter:
         lines.append(f"<strong>CPU:</strong> {self._extract_cpu_model(specs)}")
         lines.append(f"<strong>RAM:</strong> {self._summarize_ram_overview(specs)}")
 
-        drive_types, drive_usage = self._build_storage_overview(specs)
-        lines.append(f"<strong>Drive Type(s):</strong> {drive_types}")
-        lines.append(f"<strong>Drive Capacities / Used:</strong> {drive_usage}")
+        drive_information = self._build_storage_overview(specs)
+        lines.append(f"<strong>Drive Information:</strong> {drive_information}")
         lines.append("")
         return lines
 
@@ -256,9 +255,26 @@ class ReportFormatter:
 
     def _build_storage_overview(self, specs):
         if specs.get('Storage') == 'Test skipped':
-            return 'Test skipped', 'Test skipped'
+            return 'Test skipped'
 
         storage_health = specs.get('StorageHealth', []) or []
+        storage_text = specs.get('Storage', '')
+        if storage_text and storage_text != 'Storage information unavailable':
+            usage_lines = []
+            for line in storage_text.split('\n'):
+                line = line.strip()
+                if line:
+                    drive_type = self._classify_drive_type_from_line(line)
+                    if not drive_type:
+                        drive_type = self._classify_drive_type_from_storage_health(
+                            line, storage_health
+                        )
+                    if drive_type:
+                        line += f" ({drive_type})"
+                    usage_lines.append(line)
+            if usage_lines:
+                return '; '.join(usage_lines)
+
         drive_types = []
         for drive in storage_health:
             if drive.get('status') == 'N/A':
@@ -267,33 +283,14 @@ class ReportFormatter:
             if dtype:
                 drive_types.append(dtype)
 
-        if not drive_types:
-            storage_summary = specs.get('Storage', '')
-            if storage_summary and storage_summary != 'Storage information unavailable':
-                for line in storage_summary.split('\n'):
-                    if 'NVME' in line.upper():
-                        drive_types.append('NVMe SSD')
-                    elif 'SSD' in line.upper():
-                        drive_types.append('SSD')
-                    elif 'HDD' in line.upper():
-                        drive_types.append('HDD')
+        if drive_types:
+            type_counts = []
+            for dtype in sorted(set(drive_types), key=drive_types.index):
+                count = drive_types.count(dtype)
+                type_counts.append(f"{count}× {dtype}" if count > 1 else dtype)
+            return ', '.join(type_counts)
 
-        type_counts = []
-        for dtype in sorted(set(drive_types), key=drive_types.index):
-            count = drive_types.count(dtype)
-            type_counts.append(f"{count}× {dtype}" if count > 1 else dtype)
-        drive_types_text = ', '.join(type_counts) if type_counts else 'Unknown'
-
-        usage_lines = []
-        storage_text = specs.get('Storage', '')
-        if storage_text and storage_text != 'Storage information unavailable':
-            for line in storage_text.split('\n'):
-                line = line.strip()
-                if line:
-                    usage_lines.append(line)
-
-        drive_usage_text = '; '.join(usage_lines) if usage_lines else 'Unknown'
-        return drive_types_text, drive_usage_text
+        return 'Unknown'
 
     @staticmethod
     def _classify_drive_type(drive):
@@ -306,6 +303,31 @@ class ReportFormatter:
             return 'SATA SSD'
         if drive.get('media_type', '').upper() == 'HDD' or drive.get('reallocated_sectors') is not None:
             return 'HDD'
+        return None
+
+    @staticmethod
+    def _extract_drive_letter(line):
+        match = re.match(r'Drive\s+([A-Z]):', line or '', re.IGNORECASE)
+        if not match:
+            return None
+        return f"{match.group(1).upper()}:\\"
+
+    def _classify_drive_type_from_line(self, line):
+        upper = (line or '').upper()
+        if 'NVME' in upper or 'NVM EXPRESS' in upper:
+            return 'NVMe SSD'
+        if 'SSD' in upper:
+            return 'SATA SSD'
+        if 'HDD' in upper or 'HARD DISK' in upper:
+            return 'HDD'
+        return None
+
+    def _classify_drive_type_from_storage_health(self, storage_line, storage_health):
+        storage_upper = (storage_line or '').upper()
+        for drive in storage_health or []:
+            model = (drive.get('model') or '').strip()
+            if model and model.upper() in storage_upper:
+                return self._classify_drive_type(drive)
         return None
 
     # ────────────────────────────────────────────────────────────────────
