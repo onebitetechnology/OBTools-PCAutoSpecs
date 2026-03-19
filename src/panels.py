@@ -493,13 +493,15 @@ class SystemInfoPanel(QWidget):
             temps = advanced.get('temperatures', {})
             if temps.get('status') == 'ok' and temps.get('cpu_temp_c'):
                 cpu_temp = temps['cpu_temp_c']
+                cpu_sensor = temps.get('cpu_sensor')
                 if cpu_temp < 60:
                     color, label = COLORS['success'], '(Normal)'
                 elif cpu_temp < 80:
                     color, label = COLORS['warning'], '(Warm)'
                 else:
                     color, label = COLORS['error'], '(Hot)'
-                sec.add_info_row('Temp — Idle', f"{cpu_temp:.0f}\u00b0C {label}",
+                sensor_suffix = f" — {cpu_sensor}" if cpu_sensor else ""
+                sec.add_info_row('Temp — Idle', f"{cpu_temp:.0f}\u00b0C {label}{sensor_suffix}",
                                  color=color)
 
             # CPU Temperature — under load
@@ -507,6 +509,7 @@ class SystemInfoPanel(QWidget):
             if load_temp.get('status') == 'ok' and load_temp.get('peak_temp_c'):
                 peak = load_temp['peak_temp_c']
                 aborted = load_temp.get('aborted', False)
+                load_sensor = load_temp.get('sensor')
                 if peak < 75:
                     color, label = COLORS['success'], '(Normal)'
                 elif peak < 90:
@@ -514,6 +517,8 @@ class SystemInfoPanel(QWidget):
                 else:
                     color, label = COLORS['error'], '(Hot)'
                 suffix = ' — thermal limit hit!' if aborted else ''
+                if load_sensor:
+                    suffix += f" — {load_sensor}"
                 sec.add_info_row('Temp — Load',
                                  f"{peak:.0f}\u00b0C {label}{suffix}",
                                  color=color)
@@ -598,9 +603,13 @@ class SystemInfoPanel(QWidget):
 
             if gpu_metrics.get('temperature'):
                 temp = gpu_metrics['temperature']
+                sensor = gpu_metrics.get('temperature_sensor')
                 color = (COLORS['error'] if temp > 80 else
                          COLORS['warning'] if temp > 70 else None)
-                sec.set_row_value('gpu_temp', f"{temp}\u00b0C", color)
+                temp_text = f"{temp}\u00b0C"
+                if sensor:
+                    temp_text += f" — {sensor}"
+                sec.set_row_value('gpu_temp', temp_text, color)
             if gpu_metrics.get('core_clock'):
                 sec.set_row_value('gpu_core_clock',
                                   f"{gpu_metrics['core_clock']} MHz")
@@ -618,7 +627,14 @@ class SystemInfoPanel(QWidget):
         sec = self._sec_mobo
         sec.clear_dynamic()
 
-        sec.set_row_value('mobo', specs.get('Motherboard', 'Unknown'))
+        motherboard = specs.get('Motherboard', 'Unknown')
+        bios = specs.get('BIOS', 'Unknown')
+        if motherboard == 'Test skipped' or bios == 'Test skipped':
+            sec.set_row_value('mobo', 'Test skipped', COLORS['warning'])
+            sec.set_row_value('bios', 'Test skipped', COLORS['warning'])
+            return
+
+        sec.set_row_value('mobo', motherboard)
 
         chipset = specs.get('Chipset', '')
         mobo_specs = specs.get('MotherboardSpecs')
@@ -642,7 +658,7 @@ class SystemInfoPanel(QWidget):
                     color=COLORS['warning'])
 
         # BIOS
-        sec.set_row_value('bios', specs.get('BIOS', 'Unknown'))
+        sec.set_row_value('bios', bios)
         for detail_line in specs.get('BIOSDetails', []):
             if ':' in detail_line:
                 k, v = detail_line.split(':', 1)
@@ -1228,6 +1244,7 @@ class SystemInfoPanel(QWidget):
             'warning': COLORS['warning'],
             'critical': COLORS['error'],
             'unknown': COLORS['text_secondary'],
+            'skipped': COLORS['warning'],
         }
 
         # Map AdvancedDiagnostics keys → row names → AdvancedHealth keys
@@ -1254,6 +1271,10 @@ class SystemInfoPanel(QWidget):
                 if row:
                     row.set_click_handler(
                         lambda hk=health_key, dd=detail_data: self._show_detail(hk, dd))
+            else:
+                row = sec._static_rows.get(row_name)
+                if row:
+                    row.clear_click_handler()
 
     def _show_detail(self, health_key, data):
         """Open a detail popup for a specific advanced health check."""

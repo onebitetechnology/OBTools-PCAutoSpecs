@@ -37,50 +37,56 @@ class ReportFormatter:
     # ────────────────────────────────────────────────────────────────────
 
 
-    def format_diagnostic_note(self, specs):
+    def format_diagnostic_note(self, specs, upload_mode='full'):
         """
         Transform system specs dictionary into HTML diagnostic note for RepairDesk.
         """
-        sections = []
+        if upload_mode == 'overview':
+            sections = [self._format_overview_only_note(specs)]
+        else:
+            sections = []
 
-        # Header (no separator before it)
-        sections.append(self._format_header(specs))
+            # Header (no separator before it)
+            sections.append(self._format_header(specs))
 
-        # Critical Issues (only if there are any)
-        critical = self._format_critical_issues(specs)
-        if critical:
-            sections.append(critical)
+            # Critical Issues (only if there are any)
+            critical = self._format_critical_issues(specs)
+            if critical:
+                sections.append(critical)
 
-        # Hardware
-        sections.append(self._format_hardware_config(specs))
+            # Hardware
+            sections.append(self._format_hardware_config(specs))
 
-        # Network (may return empty)
-        network = self._format_network_hardware(specs)
-        if network:
-            sections.append(network)
+            # Network (may return empty)
+            network = self._format_network_hardware(specs)
+            if network:
+                sections.append(network)
 
-        # Display (may return empty)
-        display = self._format_display_config(specs)
-        if display:
-            sections.append(display)
+            # Display (may return empty)
+            display = self._format_display_config(specs)
+            if display:
+                sections.append(display)
 
-        # Battery (laptops only)
-        if specs.get('BatteryDetails'):
-            sections.append(self._format_battery_config(specs))
+            # Battery (laptops only)
+            battery = self._format_battery_config(specs)
+            if battery:
+                sections.append(battery)
 
-        # Storage Health
-        if specs.get('StorageHealth'):
-            sections.append(self._format_storage_health_comprehensive(specs))
+            # Storage Health
+            storage = self._format_storage_health_comprehensive(specs)
+            if storage:
+                sections.append(storage)
 
-        # System Status
-        sections.append(self._format_system_status(specs))
+            # System Status
+            sections.append(self._format_system_status(specs))
 
-        # Drivers
-        sections.append(self._format_driver_status(specs))
+            # Drivers
+            sections.append(self._format_driver_status(specs))
 
-        # System Health
-        if specs.get('AdvancedHealth'):
-            sections.append(self._format_advanced_health(specs))
+            # System Health
+            health = self._format_advanced_health(specs)
+            if health:
+                sections.append(health)
 
         # ── Build styled HTML output ──────────────────────────────
         # Section emoji map — matches the header strings used in each _format_* method
@@ -156,35 +162,156 @@ class ReportFormatter:
 
         return '<br>'.join(styled)
 
+    def _get_report_meta_lines(self, specs):
+        """Shared header lines for both overview and full uploads."""
+        lines = []
+
+        report_type = specs.get('_job_report_type', '')
+        if report_type:
+            lines.append(f"<strong style='font-size:14pt;'>{report_type}</strong>")
+
+        tech_name = specs.get('_job_tech_name', '')
+        if tech_name:
+            lines.append(f"<strong>Diagnosed by:</strong> {tech_name}")
+
+        if report_type or tech_name:
+            lines.append("<hr style='border:none;border-top:1px solid #ccc;margin:8px 0;'>")
+
+        return lines
+
+    def _format_overview_only_note(self, specs):
+        """Short upload for routine tickets."""
+        lines = self._get_report_meta_lines(specs)
+        lines.append("<strong>System Overview</strong>")
+
+        lines.append(
+            f"<strong>Current OS Version:</strong> {self._format_current_os_version(specs)}"
+        )
+        lines.append(f"<strong>CPU:</strong> {self._extract_cpu_model(specs)}")
+        lines.append(f"<strong>RAM:</strong> {self._summarize_ram_overview(specs)}")
+
+        drive_types, drive_usage = self._build_storage_overview(specs)
+        lines.append(f"<strong>Drive Type(s):</strong> {drive_types}")
+        lines.append(f"<strong>Drive Capacities / Used:</strong> {drive_usage}")
+        lines.append("")
+        return lines
+
+    def _format_current_os_version(self, specs):
+        windows_details = specs.get('WindowsDetails', '')
+        if isinstance(windows_details, str) and windows_details:
+            details = {}
+            for part in windows_details.split(', '):
+                if ':' in part:
+                    key, value = part.split(':', 1)
+                    details[key.strip()] = value.strip()
+
+            os_parts = []
+            if details.get('Edition'):
+                os_parts.append(details['Edition'])
+            elif specs.get('OS'):
+                os_parts.append(specs['OS'])
+
+            version_parts = []
+            if details.get('Version'):
+                version_parts.append(f"Version {details['Version']}")
+            if details.get('Build'):
+                version_parts.append(f"Build {details['Build']}")
+            if version_parts:
+                os_parts.append(', '.join(version_parts))
+
+            if os_parts:
+                return ' — '.join(os_parts)
+
+        return specs.get('OS', 'Unknown')
+
+    def _extract_cpu_model(self, specs):
+        cpu_raw = specs.get('CPU', 'Unknown CPU')
+        if cpu_raw == 'Test skipped':
+            return 'Test skipped'
+        cpu_model = cpu_raw.split(' | ')[0] if ' | ' in cpu_raw else cpu_raw
+        cpu_model = cpu_model.replace('Intel(R)', 'Intel').replace('(TM)', '')
+        cpu_model = cpu_model.replace('(R)', '').replace('CPU @', '').strip()
+        return cpu_model or 'Unknown CPU'
+
+    def _summarize_ram_overview(self, specs):
+        ram_raw = specs.get('RAM', 'Unknown')
+        if ram_raw == 'Test skipped':
+            return 'Test skipped'
+
+        match = re.search(
+            r'([\d.]+\s*GB(?:\s+DDR\d+)?(?:\s*@\s*[\d]+MHz)?)', ram_raw
+        )
+        summary = match.group(1) if match else ram_raw
+        used_match = re.search(r'([\d.]+)% used', ram_raw)
+        if used_match:
+            summary = f"{summary} ({used_match.group(1)}% used)"
+        return summary
+
+    def _build_storage_overview(self, specs):
+        if specs.get('Storage') == 'Test skipped':
+            return 'Test skipped', 'Test skipped'
+
+        storage_health = specs.get('StorageHealth', []) or []
+        drive_types = []
+        for drive in storage_health:
+            if drive.get('status') == 'N/A':
+                continue
+            dtype = self._classify_drive_type(drive)
+            if dtype:
+                drive_types.append(dtype)
+
+        if not drive_types:
+            storage_summary = specs.get('Storage', '')
+            if storage_summary and storage_summary != 'Storage information unavailable':
+                for line in storage_summary.split('\n'):
+                    if 'NVME' in line.upper():
+                        drive_types.append('NVMe SSD')
+                    elif 'SSD' in line.upper():
+                        drive_types.append('SSD')
+                    elif 'HDD' in line.upper():
+                        drive_types.append('HDD')
+
+        type_counts = []
+        for dtype in sorted(set(drive_types), key=drive_types.index):
+            count = drive_types.count(dtype)
+            type_counts.append(f"{count}× {dtype}" if count > 1 else dtype)
+        drive_types_text = ', '.join(type_counts) if type_counts else 'Unknown'
+
+        usage_lines = []
+        storage_text = specs.get('Storage', '')
+        if storage_text and storage_text != 'Storage information unavailable':
+            for line in storage_text.split('\n'):
+                line = line.strip()
+                if line:
+                    usage_lines.append(line)
+
+        drive_usage_text = '; '.join(usage_lines) if usage_lines else 'Unknown'
+        return drive_types_text, drive_usage_text
+
+    @staticmethod
+    def _classify_drive_type(drive):
+        model = (drive.get('model') or '').upper()
+        if 'NVME' in model or 'NVM' in model or drive.get('available_spare') is not None:
+            return 'NVMe SSD'
+        if 'USB' in model or drive.get('status') == 'N/A':
+            return 'USB'
+        if 'SSD' in model or drive.get('percentage_used') is not None:
+            return 'SATA SSD'
+        if drive.get('media_type', '').upper() == 'HDD' or drive.get('reallocated_sectors') is not None:
+            return 'HDD'
+        return None
+
     # ────────────────────────────────────────────────────────────────────
     # RepairDesk note sections
     # ────────────────────────────────────────────────────────────────────
 
     def _format_header(self, specs):
         """Format header section — report type first (large bold), then tech name, then system overview"""
-        lines = []
+        lines = self._get_report_meta_lines(specs)
+        skip_cats = specs.get('_job_skip_cats', set())
 
         import platform
         computer_name = platform.node() if hasattr(platform, 'node') else specs.get('ComputerName', 'Unknown')
-
-        # Report type — large bold, first line of the note body
-        report_type = specs.get('_job_report_type', '')
-        if report_type:
-            lines.append(
-                f"<strong style='font-size:14pt;'>{report_type}</strong>"
-            )
-
-        # Diagnosed by — no ticket, no timestamp
-        tech_name = specs.get('_job_tech_name', '')
-        if tech_name:
-            lines.append(f"<strong>Diagnosed by:</strong> {tech_name}")
-
-        # Tech notes are already shown by RepairDesk above the note body — omit here
-        # Ticket ID also shown by RepairDesk — omit
-        # "One Bite Technology" title and timestamp — omit (clutter)
-
-        if report_type or tech_name:
-            lines.append("<hr style='border:none;border-top:1px solid #ccc;margin:8px 0;'>")
 
         lines.append("<strong>System Overview</strong>")
 
@@ -216,24 +343,24 @@ class ReportFormatter:
 
         # Motherboard
         motherboard = specs.get('Motherboard', 'Unknown')
-        if motherboard and motherboard != 'Unknown':
+        if 'motherboard' not in skip_cats and motherboard and motherboard not in ('Unknown', 'Test skipped'):
             lines.append(f"<strong>Motherboard:</strong> {motherboard}")
 
         # Chipset
         chipset = specs.get('Chipset', '')
-        if chipset:
+        if 'motherboard' not in skip_cats and chipset:
             lines.append(f"<strong>Chipset:</strong> {chipset}")
 
         # Max RAM (from motherboard database)
         mobo_specs = specs.get('MotherboardSpecs')
-        if mobo_specs:
+        if 'motherboard' not in skip_cats and mobo_specs:
             max_ram = f"{mobo_specs.get('max_ram', 'Unknown')} ({mobo_specs.get('max_per_dimm', '?')} per slot x {mobo_specs.get('dimm_slots', '?')} slots)"
             lines.append(f"<strong>Max RAM Supported:</strong> {max_ram}")
 
         # BIOS + Age Estimate
         bios = specs.get('BIOS', 'Unknown')
         bios_details = specs.get('BIOSDetails', [])  # list of extra lines: Version, Date, SMBIOS
-        if bios and bios != 'Unknown':
+        if 'motherboard' not in skip_cats and bios and bios not in ('Unknown', 'Test skipped'):
             # Assemble full BIOS string: first line + version + date from details
             bios_mfr = re.sub(r'^Manufacturer:\s*', '', bios)
             bios_version = next((re.sub(r'^Version:\s*', '', d) for d in bios_details if d.startswith('Version:')), None)
@@ -308,7 +435,7 @@ class ReportFormatter:
 
         # Device Manager
         device_errors = specs.get('DeviceManagerErrors', [])
-        if device_errors:
+        if 'device_manager' not in skip_cats and device_errors:
             issues.append(f"Device Manager: {len(device_errors)} devices with driver errors")
 
         # CPU/RAM usage
@@ -455,7 +582,7 @@ class ReportFormatter:
 
         # Check for Device Manager errors
         device_errors = specs.get('DeviceManagerErrors', [])
-        if device_errors:
+        if 'device_manager' not in skip_cats and device_errors:
             issues.append(f"Device Manager: {len(device_errors)} devices with driver errors")
 
         # Check for high CPU usage - SystemHealth is a string, parse it
@@ -556,15 +683,20 @@ class ReportFormatter:
             temps = advanced.get('temperatures', {})
             if temps.get('status') == 'ok' and temps.get('cpu_temp_c'):
                 t = temps['cpu_temp_c']
+                sensor = temps.get('cpu_sensor')
                 t_label = '(Hot)' if t >= 80 else '(Warm)' if t >= 60 else '(Normal)'
-                lines.append(f"<strong>CPU Temp (Idle):</strong> {t:.0f}°C {t_label}")
+                sensor_suffix = f" — {sensor}" if sensor else ""
+                lines.append(f"<strong>CPU Temp (Idle):</strong> {t:.0f}°C {t_label}{sensor_suffix}")
             load = advanced.get('cpu_load_temp', {})
             if load.get('status') == 'ok' and load.get('peak_temp_c'):
                 aborted = load.get('aborted', False)
                 peak = load['peak_temp_c']
+                sensor = load.get('sensor')
                 p_label = '(Hot)' if peak >= 90 else '(Warm)' if peak >= 75 else '(Normal)'
                 suffix = ' — thermal limit hit!' if aborted else (
                     ' — throttling detected' if load.get('throttling_detected') else '')
+                if sensor:
+                    suffix += f" — {sensor}"
                 lines.append(f"<strong>CPU Temp (Load):</strong> {peak:.0f}°C {p_label}{suffix}")
 
             # Memory temp (DDR5 only — DDR4 usually not available)
@@ -578,7 +710,10 @@ class ReportFormatter:
                 gpu_name = gpu_load.get('gpu_name', 'GPU')
                 gpu_peak = gpu_load['peak_temp_c']
                 gpu_aborted = gpu_load.get('aborted', False)
+                gpu_sensor = gpu_load.get('sensor')
                 gpu_suffix = ' \u2014 thermal limit hit!' if gpu_aborted else ''
+                if gpu_sensor:
+                    gpu_suffix += f" \u2014 {gpu_sensor}"
                 lines.append(f"<strong>GPU Temp (Load):</strong> {gpu_peak:.0f}\u00b0C{gpu_suffix} ({gpu_name})")
 
             # Windows compatibility
@@ -706,13 +841,16 @@ class ReportFormatter:
         # GPU temperature at idle — try GPUMetrics first, then AdvancedHealth
         gpu_metrics = specs.get('GPUMetrics', {})
         gpu_temp = gpu_metrics.get('temperature')
+        gpu_sensor = gpu_metrics.get('temperature_sensor')
         if not gpu_temp:
             advanced = specs.get('AdvancedHealth', {})
             temps = advanced.get('temperatures', {})
             if temps.get('status') == 'ok' and temps.get('gpu'):
                 gpu_temp = temps['gpu'].get('temp_c')
+                gpu_sensor = temps['gpu'].get('sensor')
         if gpu_temp:
-            lines.append(f"<strong>GPU Temperature:</strong> {gpu_temp}°C (idle)")
+            sensor_suffix = f" — {gpu_sensor}" if gpu_sensor else ""
+            lines.append(f"<strong>GPU Temperature:</strong> {gpu_temp}°C (idle){sensor_suffix}")
 
         lines.append("")
 
@@ -1128,6 +1266,13 @@ class ReportFormatter:
             lines.append("")
             return lines
 
+        if not battery_details:
+            if battery_status and battery_status not in ('Unknown', 'Not Installed'):
+                lines.append(f"<strong>Status:</strong> {battery_status}")
+                lines.append("")
+                return lines
+            return []
+
         if battery_details:
             # Battery Model and Manufacturer
             if battery_details.get('model_name') or battery_details.get('manufacturer'):
@@ -1222,6 +1367,7 @@ class ReportFormatter:
         """Format system status section with performance baselines"""
         lines = []
         lines.append("<strong>System Status</strong>")
+        skip_cats = specs.get('_job_skip_cats', set())
 
         # OS
         os_name = specs.get('OS', 'Unknown')
@@ -1271,7 +1417,7 @@ class ReportFormatter:
 
         # Power plan
         power_plan = specs.get('ActivePowerPlan') or specs.get('PowerPlan')
-        if power_plan:
+        if 'power_boot' not in skip_cats and power_plan and power_plan != 'Test skipped':
             lines.append(f"<strong>Power Plan:</strong> {power_plan}")
 
         lines.append("")
@@ -1319,6 +1465,7 @@ class ReportFormatter:
         """Format driver status section"""
         lines = []
         lines.append("<strong>Drivers</strong>")
+        skip_cats = specs.get('_job_skip_cats', set())
 
         # GPU Driver — extract actual driver info from GPU string
         gpu = specs.get('GPU', '')
@@ -1363,7 +1510,10 @@ class ReportFormatter:
 
         # Device Manager Errors
         device_errors = specs.get('DeviceManagerErrors', [])
-        if device_errors:
+        if 'device_manager' in skip_cats:
+            lines.append("")
+            lines.append("<strong>Device Manager Errors:</strong> Test skipped")
+        elif device_errors:
             lines.append("")
             lines.append(f"<strong>Device Manager Errors:</strong> {len(device_errors)} devices with issues")
             for error in device_errors[:3]:  # Show first 3
@@ -1384,99 +1534,169 @@ class ReportFormatter:
         lines.append("<strong>System Health</strong>")
 
         advanced = specs.get('AdvancedHealth', {})
+        skip_cats = specs.get('_job_skip_cats', set())
 
-        # 1. Event Viewer — translate WMI sources into plain English
+        advanced_categories = (
+            'event_logs', 'windows_update', 'defender',
+            'startup_items', 'device_manager', 'power_boot',
+        )
+        if all(category in skip_cats for category in advanced_categories):
+            lines.append("<strong>Status:</strong> Test skipped")
+            lines.append("")
+            return lines
+
         event_viewer = advanced.get('event_viewer', {})
-        if event_viewer.get('status') == 'ok':
+        if 'event_logs' in skip_cats:
+            lines.append("<strong>Event Log:</strong> Test skipped")
+        elif event_viewer.get('status') == 'ok':
             total = event_viewer.get('total_events', 0)
             days = event_viewer.get('days_lookback', 7)
-
             if total == 0:
-                lines.append(f"<strong>Event Log:</strong> No errors or crashes in the last {days} days")
+                lines.append(f"<strong>Event Log ({days} days):</strong> No errors or crashes detected")
             else:
-                # Translate WMI source names to tech-readable descriptions
-                source_map = {
-                    'Application Error': 'application crashes',
-                    'Application Hang': 'application freezes',
-                    'Windows Error Reporting': 'crash reports sent',
-                    'Microsoft-Windows-DistributedCOM': 'DCOM permission errors',
-                    'Microsoft-Windows-Defrag': 'scheduled disk maintenance',
-                    'Microsoft-Windows-WHEA-Logger': 'hardware errors (WHEA)',
-                    'Microsoft-Windows-Kernel-Power': 'unexpected shutdowns',
-                    'Microsoft-Windows-WindowsUpdateClient': 'update failures',
-                    'Microsoft-Windows-DNS-Client': 'DNS resolution failures',
-                    'Microsoft-Windows-WLAN-AutoConfig': 'Wi-Fi connection drops',
-                    'Microsoft-Windows-Ntfs': 'filesystem errors',
-                    'Microsoft-Windows-Hyper-V-VmSwitch': 'virtual switch errors',
-                    'volmgr': 'disk volume errors',
-                    'disk': 'disk I/O errors',
-                    'atapi': 'SATA controller errors',
-                    'nvlddmkm': 'NVIDIA GPU driver crashes',
-                    'atikmdag': 'AMD GPU driver crashes',
-                    'Ntfs': 'filesystem errors',
-                    'BugCheck': 'blue screen events',
-                }
+                lines.append(f"<strong>Event Log ({days} days):</strong> {total} error/critical event(s)")
+                for source in event_viewer.get('top_sources', [])[:5]:
+                    lines.append(f"  - {source.get('name', 'Unknown')}: {source.get('count', 0)} event(s)")
+                    for event in source.get('recent', [])[:2]:
+                        event_line = self._format_event_viewer_line(event)
+                        if event_line:
+                            lines.append(f"    • {event_line}")
+                latest_critical = event_viewer.get('latest_critical')
+                if latest_critical:
+                    crit_parts = [latest_critical.get('source', 'Unknown source')]
+                    if latest_critical.get('timestamp'):
+                        crit_parts.append(str(latest_critical['timestamp']))
+                    if latest_critical.get('message'):
+                        crit_parts.append(str(latest_critical['message']))
+                    lines.append(f"  - Latest critical: {' — '.join(crit_parts)}")
 
-                top_sources = event_viewer.get('top_sources', [])
-                translated = []
-                for s in top_sources[:4]:
-                    name = s['name']
-                    count = s['count']
-                    # Try exact match, then partial match for driver names
-                    friendly = source_map.get(name)
-                    if not friendly:
-                        # Check if it looks like a driver name (short, no hyphens)
-                        if re.match(r'^[A-Za-z0-9]+$', name) and len(name) < 20:
-                            friendly = f"{name} driver errors"
-                        else:
-                            # Strip Microsoft-Windows- prefix for readability
-                            friendly = re.sub(r'^Microsoft-Windows-', '', name).lower()
-                    translated.append(f"{count} {friendly}")
-
-                lines.append(f"<strong>Event Log ({days} days):</strong> {', '.join(translated)}")
-
-        # 2. Windows Update
         wu_health = advanced.get('windows_update', {})
-        if wu_health.get('status') == 'ok':
-            failed = wu_health.get('failed_updates_last_30_days', 0)
-            pending_reboot = wu_health.get('pending_reboot', False)
-            last_update = wu_health.get('last_update')
-
-            parts = []
+        if 'windows_update' in skip_cats:
+            lines.append("<strong>Windows Update:</strong> Test skipped")
+        elif wu_health.get('status') == 'ok':
+            last_update = wu_health.get('last_update') or {}
             if last_update:
-                parts.append(f"last update {last_update.get('installed_on', 'Unknown')}")
-            if failed > 0:
-                parts.append(f"{failed} failed")
-            if pending_reboot:
-                parts.append("reboot pending")
-            if not parts:
-                parts.append("up to date")
-            lines.append(f"<strong>Windows Update:</strong> {', '.join(parts)}")
+                update_bits = [last_update.get('hotfix_id', 'Unknown')]
+                if last_update.get('description'):
+                    update_bits.append(last_update['description'])
+                if last_update.get('installed_on'):
+                    update_bits.append(last_update['installed_on'])
+                lines.append(f"<strong>Windows Update:</strong> Last installed — {' — '.join(update_bits)}")
+            else:
+                lines.append("<strong>Windows Update:</strong> No recent installed update detected")
+            failed = wu_health.get('failed_updates_last_30_days', 0)
+            lines.append(
+                f"  - Failed updates (30 days): {failed if failed else 'None'}"
+            )
+            lines.append(
+                "  - Pending reboot: Yes — restart recommended"
+                if wu_health.get('pending_reboot')
+                else "  - Pending reboot: No"
+            )
 
-        # 3. Defender
         defender = advanced.get('defender', {})
-        if defender.get('status') == 'ok':
-            rt_enabled = defender.get('realtime_enabled', False)
-            sig_age = defender.get('signature_age_days')
+        if 'defender' in skip_cats:
+            lines.append("<strong>Defender:</strong> Test skipped")
+        elif defender.get('status') == 'ok':
+            lines.append(
+                "<strong>Defender:</strong> "
+                + ("Real-time protection ON" if defender.get('realtime_enabled') else "Real-time protection OFF")
+            )
+            lines.append(
+                "  - Antispyware: "
+                + ("Enabled" if defender.get('antispyware_enabled') else "Disabled")
+            )
+            if defender.get('signature_last_updated'):
+                sig_line = defender['signature_last_updated']
+                if defender.get('signature_age_days') is not None:
+                    sig_line += f" ({defender['signature_age_days']} day(s) old)"
+                lines.append(f"  - Definitions updated: {sig_line}")
+            if defender.get('last_quick_scan'):
+                lines.append(f"  - Last quick scan: {defender['last_quick_scan']}")
+            if defender.get('last_full_scan'):
+                lines.append(f"  - Last full scan: {defender['last_full_scan']}")
 
-            parts = []
-            parts.append("ON" if rt_enabled else "OFF")
-            if sig_age is not None:
-                if sig_age <= 1:
-                    parts.append("signatures current")
-                else:
-                    parts.append(f"signatures {sig_age} days old")
-            lines.append(f"<strong>Defender:</strong> {', '.join(parts)}")
-
-        # Temperatures omitted — shown under CPU and GPU in Hardware Configuration
-
-        # 4. Startup — only if noteworthy
         startup = advanced.get('startup_impact', {})
-        if startup.get('status') == 'ok':
+        if 'startup_items' in skip_cats:
+            lines.append("<strong>Startup Items:</strong> Test skipped")
+        elif startup.get('status') == 'ok':
             count = startup.get('startup_item_count', 0)
-            if count > 0:
-                lines.append(f"<strong>Startup Items:</strong> {count}")
+            lines.append(f"<strong>Startup Items:</strong> {count}")
+            for item in startup.get('items', [])[:10]:
+                name = item.get('Name', 'Unknown')
+                source = item.get('Source', '')
+                command = item.get('Command', '')
+                detail = name
+                if source:
+                    detail += f" [{source}]"
+                if command:
+                    detail += f" — {command}"
+                lines.append(f"  - {detail}")
+
+        device_manager = advanced.get('device_manager', {})
+        if 'device_manager' in skip_cats:
+            lines.append("<strong>Device Manager:</strong> Test skipped")
+        elif device_manager.get('status') == 'ok':
+            count = device_manager.get('error_count', 0)
+            lines.append(
+                f"<strong>Device Manager:</strong> "
+                + (f"{count} device(s) with errors" if count else "No device errors detected")
+            )
+            for device in device_manager.get('devices', [])[:10]:
+                lines.append(
+                    f"  - {device.get('name', 'Unknown')}: "
+                    f"Code {device.get('error_code', '?')} — "
+                    f"{device.get('error_description', 'Unknown error')}"
+                )
+
+        power_plan = advanced.get('power_plan', {})
+        boot_time = advanced.get('boot_time', {})
+        if 'power_boot' in skip_cats:
+            lines.append("<strong>Power & Boot:</strong> Test skipped")
+        else:
+            power_bits = []
+            if power_plan.get('status') == 'ok':
+                power_bits.append(power_plan.get('plan_name', 'Unknown'))
+                if power_plan.get('performance_level'):
+                    power_bits.append(power_plan['performance_level'].replace('_', ' '))
+            if boot_time.get('status') == 'ok':
+                power_bits.append(f"boot {boot_time.get('boot_time_seconds', 'Unknown')}s")
+            if power_bits:
+                lines.append(f"<strong>Power & Boot:</strong> {', '.join(power_bits)}")
+            if power_plan.get('status') == 'ok' and power_plan.get('plan_guid'):
+                lines.append(f"  - Active plan GUID: {power_plan['plan_guid']}")
+            if boot_time.get('status') == 'ok':
+                if boot_time.get('last_boot'):
+                    lines.append(f"  - Last boot: {boot_time['last_boot']}")
+                if boot_time.get('classification'):
+                    lines.append(f"  - Boot assessment: {boot_time['classification']}")
 
         lines.append("")
 
         return lines
+
+    @staticmethod
+    def _format_event_viewer_line(event):
+        """Condense event log detail rows for the upload note."""
+        if not isinstance(event, dict):
+            return str(event)
+
+        app = event.get('app')
+        description = event.get('description')
+        event_id = event.get('id')
+        event_time = event.get('time')
+
+        if app and description:
+            line = f"{app}: {description}"
+        elif app:
+            line = f"{app} crash"
+        elif description:
+            line = description
+        elif event_id:
+            line = f"Event {event_id}"
+        else:
+            line = "Unknown event"
+
+        if event_time:
+            line += f" ({event_time})"
+        return line

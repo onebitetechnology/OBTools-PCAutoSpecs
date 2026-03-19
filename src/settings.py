@@ -10,7 +10,7 @@ import json
 import logging
 
 APP_NAME = 'PC AutoSpec'
-APP_VERSION = '2.2.17'
+APP_VERSION = '2.2.18'
 
 # ---------------------------------------------------------------------------
 # Paths — everything lives next to the exe (portable)
@@ -133,15 +133,41 @@ def get_report_title():
         return f"{store} \u2014 System Device Report"
     return "System Device Report"
 
+UPLOAD_SCOPE_OVERVIEW = 'overview'
+UPLOAD_SCOPE_FULL = 'full'
+DEFAULT_UPLOAD_SCOPE = UPLOAD_SCOPE_OVERVIEW
+
+UPLOAD_SCOPE_CHOICES = [
+    (UPLOAD_SCOPE_OVERVIEW, 'Upload System Overview only'),
+    (UPLOAD_SCOPE_FULL, 'Upload full results'),
+]
+
 # Test categories shown in the startup dialog and used for selective scanning
+SCAN_CATEGORY_GROUPS = [
+    ('Hardware', [
+        ('cpu',          'CPU'),
+        ('ram',          'RAM'),
+        ('gpu',          'GPU'),
+        ('motherboard',  'Motherboard & BIOS'),
+        ('storage',      'Storage'),
+        ('network',      'Network & WiFi'),
+        ('display',      'Display & Webcam'),
+        ('battery',      'Battery'),
+    ]),
+    ('Diagnostics', [
+        ('event_logs',      'Event Logs'),
+        ('windows_update',  'Windows Update'),
+        ('defender',        'Defender'),
+        ('startup_items',   'Startup Items'),
+        ('device_manager',  'Device Manager'),
+        ('power_boot',      'Power & Boot'),
+    ]),
+]
+
 SCAN_CATEGORIES = [
-    ('cpu',      'CPU'),
-    ('ram',      'RAM'),
-    ('gpu',      'GPU'),
-    ('storage',  'Storage'),
-    ('network',  'Network & WiFi'),
-    ('battery',  'Battery'),
-    ('display',  'Display'),
+    category
+    for _, categories in SCAN_CATEGORY_GROUPS
+    for category in categories
 ]
 
 

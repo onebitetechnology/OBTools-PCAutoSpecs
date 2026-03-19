@@ -471,7 +471,12 @@ def _collect_gpu_temp_nvml() -> Optional[Dict[str, Any]]:
         if isinstance(name, bytes):
             name = name.decode('utf-8')
         pynvml.nvmlShutdown()
-        return {"name": name, "temp_c": temp}
+        return {
+            "name": name,
+            "temp_c": temp,
+            "sensor": "GPU Core",
+            "source": "NVML",
+        }
 
     try:
         return _try_nvml()
@@ -528,7 +533,12 @@ def _collect_gpu_temp_amd() -> Optional[Dict[str, Any]]:
                             temp_c = temp_raw / 1000.0
                             # Sanity check (valid GPU temps: 20-110°C)
                             if 20 <= temp_c <= 120:
-                                return {"name": "AMD GPU", "temp_c": int(temp_c)}
+                                return {
+                                    "name": "AMD GPU",
+                                    "temp_c": int(temp_c),
+                                    "sensor": "AMDGPU_Temperature",
+                                    "source": "WMI",
+                                }
                     except Exception:
                         pass
         except Exception as e:
@@ -548,7 +558,12 @@ def _collect_gpu_temp_amd() -> Optional[Dict[str, Any]]:
                                 temp_c = float(sensor.Value)
                                 if 20 <= temp_c <= 120:
                                     gpu_name = str(sensor.Parent) if hasattr(sensor, 'Parent') else "AMD GPU"
-                                    return {"name": gpu_name, "temp_c": int(temp_c)}
+                                    return {
+                                        "name": gpu_name,
+                                        "temp_c": int(temp_c),
+                                        "sensor": str(sensor.Name),
+                                        "source": "OpenHardwareMonitor WMI",
+                                    }
                 except Exception:
                     pass
         except Exception as e:
@@ -579,7 +594,7 @@ def _collect_gpu_temp_amd() -> Optional[Dict[str, Any]]:
         return None
 
 
-def _collect_cpu_temp_lhm() -> Optional[float]:
+def _collect_cpu_temp_info() -> Optional[Dict[str, Any]]:
     """
     Get CPU package temperature.
     Tries in order:
@@ -602,7 +617,11 @@ def _collect_cpu_temp_lhm() -> Optional[float]:
                 try:
                     temp = float(value.replace('°C', '').replace(',', '.').strip())
                     if 20 <= temp <= 120:
-                        results.append(temp)
+                        results.append({
+                            'temp_c': round(temp, 1),
+                            'sensor': name.strip(),
+                            'source': 'LibreHardwareMonitor',
+                        })
                 except (ValueError, AttributeError):
                     pass
             for child in node.get('Children', []):
@@ -613,8 +632,8 @@ def _collect_cpu_temp_lhm() -> Optional[float]:
             walk(child, temps)
 
         if temps:
-            logging.debug(f"CPU temp via LHM HTTP: {temps[0]:.1f}°C")
-            return round(temps[0], 1)
+            logging.debug(f"CPU temp via LHM HTTP: {temps[0]['temp_c']:.1f}°C ({temps[0]['sensor']})")
+            return temps[0]
     except Exception as e:
         logging.debug(f"LHM HTTP temp unavailable: {e}")
 
@@ -634,13 +653,23 @@ def _collect_cpu_temp_lhm() -> Optional[float]:
                 if kelvin_tenths:
                     celsius = (kelvin_tenths / 10.0) - 273.15
                     if 20 <= celsius <= 120:
-                        readings.append(celsius)
+                        zone_name = getattr(z, 'InstanceName', None) or 'ACPI Thermal Zone'
+                        readings.append((celsius, str(zone_name)))
             except Exception:
                 pass
         if readings:
-            avg = sum(readings) / len(readings)
+            avg = sum(temp for temp, _ in readings) / len(readings)
+            zone_names = []
+            for _, zone_name in readings:
+                if zone_name not in zone_names:
+                    zone_names.append(zone_name)
+            sensor_name = zone_names[0] if len(zone_names) == 1 else f"ACPI Thermal Zones ({len(zone_names)})"
             logging.debug(f"CPU temp via MSAcpi thermal zone: {avg:.1f}°C ({len(readings)} zones)")
-            return round(avg, 1)
+            return {
+                'temp_c': round(avg, 1),
+                'sensor': sensor_name,
+                'source': 'MSAcpi_ThermalZoneTemperature',
+            }
     except Exception as e:
         logging.debug(f"MSAcpi thermal zone unavailable: {e}")
 
@@ -658,17 +687,35 @@ def _collect_cpu_temp_lhm() -> Optional[float]:
                 if val:
                     celsius = val / 10.0
                     if 20 <= celsius <= 120:
-                        readings.append(celsius)
+                        probe_name = getattr(p, 'Name', None) or 'Win32 Temperature Probe'
+                        readings.append((celsius, str(probe_name)))
             except Exception:
                 pass
         if readings:
-            avg = sum(readings) / len(readings)
+            avg = sum(temp for temp, _ in readings) / len(readings)
+            probe_names = []
+            for _, probe_name in readings:
+                if probe_name not in probe_names:
+                    probe_names.append(probe_name)
+            sensor_name = probe_names[0] if len(probe_names) == 1 else f"Win32 Temperature Probes ({len(probe_names)})"
             logging.debug(f"CPU temp via Win32_TemperatureProbe: {avg:.1f}°C")
-            return round(avg, 1)
+            return {
+                'temp_c': round(avg, 1),
+                'sensor': sensor_name,
+                'source': 'Win32_TemperatureProbe',
+            }
     except Exception as e:
         logging.debug(f"Win32_TemperatureProbe unavailable: {e}")
 
     logging.debug("All CPU temperature methods failed")
+    return None
+
+
+def _collect_cpu_temp_lhm() -> Optional[float]:
+    """Backward-compatible float-only CPU temp helper."""
+    temp_info = _collect_cpu_temp_info()
+    if temp_info:
+        return temp_info.get('temp_c')
     return None
 
 
@@ -740,7 +787,12 @@ def _collect_gpu_temp_lhm() -> Optional[Dict[str, Any]]:
                 try:
                     temp = float(value.replace('°C', '').replace(',', '.').strip())
                     if 20 <= temp <= 120:
-                        results.append({'name': gpu_name or 'GPU', 'temp_c': round(temp, 1)})
+                        results.append({
+                            'name': gpu_name or 'GPU',
+                            'temp_c': round(temp, 1),
+                            'sensor': name.strip(),
+                            'source': 'LibreHardwareMonitor',
+                        })
                 except (ValueError, AttributeError):
                     pass
             for child in node.get('Children', []):
@@ -780,7 +832,8 @@ def collect_temperatures() -> Dict[str, Any]:
         import time
         time.sleep(5)
 
-        cpu_temp = _collect_cpu_temp_wmi()
+        cpu_temp_info = _collect_cpu_temp_info()
+        cpu_temp = cpu_temp_info.get('temp_c') if cpu_temp_info else None
 
         # Try NVIDIA GPU first
         gpu_data = _collect_gpu_temp_nvml()
@@ -799,6 +852,8 @@ def collect_temperatures() -> Dict[str, Any]:
         return {
             "status": "ok",
             "cpu_temp_c": round(cpu_temp, 1) if cpu_temp else None,
+            "cpu_sensor": cpu_temp_info.get('sensor') if cpu_temp_info else None,
+            "cpu_sensor_source": cpu_temp_info.get('source') if cpu_temp_info else None,
             "gpu": gpu_data
         }
 
@@ -957,6 +1012,7 @@ def collect_gpu_temp_under_load(
     samples = []
     aborted = False
     abort_reason = None
+    last_sensor = None
 
     try:
         # ── Ramp phase ─────────────────────────────────────────────
@@ -975,6 +1031,7 @@ def collect_gpu_temp_under_load(
             temp_data = _collect_gpu_temp_lhm()
             temp = temp_data['temp_c'] if temp_data else None
             if temp:
+                last_sensor = temp_data.get('sensor') or last_sensor
                 pct = int(100 * elapsed / ramp_sec)
                 _log(f"  GPU ramp [{int(elapsed)}s / {ramp_sec}s] {pct}% — {temp:.0f}\u00b0C\n")
                 if temp_callback:
@@ -984,7 +1041,7 @@ def collect_gpu_temp_under_load(
                     abort_reason = f"GPU thermal limit during ramp: {temp:.0f}\u00b0C"
                     _log(f"  \u26a0 {abort_reason} — aborting\n")
                     return {"status": "ok", "gpu_name": gpu_name,
-                            "peak_temp_c": round(temp, 1), "aborted": True,
+                            "peak_temp_c": round(temp, 1), "sensor": last_sensor, "aborted": True,
                             "abort_reason": abort_reason, "samples": [round(temp, 1)],
                             "duration_sec": round(time.monotonic() - ramp_start, 1)}
 
@@ -1003,6 +1060,7 @@ def collect_gpu_temp_under_load(
             temp_data = _collect_gpu_temp_lhm()
             temp = temp_data['temp_c'] if temp_data else None
             if temp:
+                last_sensor = temp_data.get('sensor') or last_sensor
                 elapsed = int(time.monotonic() - start)
                 samples.append(round(temp, 1))
                 _log(f"  GPU load temp [{elapsed}s]: {temp:.0f}\u00b0C\n")
@@ -1020,6 +1078,7 @@ def collect_gpu_temp_under_load(
             "status": "ok",
             "gpu_name": gpu_name,
             "peak_temp_c": peak,
+            "sensor": last_sensor,
             "aborted": aborted,
             "abort_reason": abort_reason,
             "samples": samples,
@@ -1095,6 +1154,7 @@ def collect_cpu_temp_under_load(
         ramp_start = time.monotonic()
         ramp_step_sec = 1
         ramp_peak = 0.0  # track highest temp seen during ramp
+        last_sensor = None
         while time.monotonic() - ramp_start < ramp_sec:
             time.sleep(ramp_step_sec)
             elapsed = time.monotonic() - ramp_start
@@ -1105,8 +1165,10 @@ def collect_cpu_temp_under_load(
                     q.put_nowait(fraction)
                 except Exception:
                     pass
-            temp = _collect_cpu_temp_wmi()
+            temp_info = _collect_cpu_temp_info()
+            temp = temp_info.get('temp_c') if temp_info else None
             if temp is not None:
+                last_sensor = temp_info.get('sensor') or last_sensor
                 ramp_peak = max(ramp_peak, temp)
                 pct = int(fraction * 100)
                 _log(f"  Ramp [{int(elapsed)}s / {ramp_sec}s] {pct}% load — {temp:.0f}°C\n")
@@ -1121,6 +1183,7 @@ def collect_cpu_temp_under_load(
                     return {
                         "status": "ok",
                         "peak_temp_c": round(temp, 1),
+                        "sensor": last_sensor,
                         "aborted": True,
                         "abort_reason": abort_reason,
                         "samples": [round(temp, 1)],
@@ -1146,8 +1209,10 @@ def collect_cpu_temp_under_load(
 
         while time.monotonic() - start < duration_sec:
             time.sleep(1)
-            temp = _collect_cpu_temp_wmi()
+            temp_info = _collect_cpu_temp_info()
+            temp = temp_info.get('temp_c') if temp_info else None
             if temp is not None:
+                last_sensor = temp_info.get('sensor') or last_sensor
                 samples.append(round(temp, 1))
                 elapsed = int(time.monotonic() - start)
                 _log(f"  CPU load temp [{elapsed}s]: {temp:.0f}°C\n")
@@ -1178,6 +1243,7 @@ def collect_cpu_temp_under_load(
             return {
                 "status": "ok",
                 "peak_temp_c": peak,
+                "sensor": last_sensor,
                 "aborted": True,
                 "abort_reason": abort_reason,
                 "throttling_detected": throttling,
@@ -1188,6 +1254,7 @@ def collect_cpu_temp_under_load(
         return {
             "status": "ok",
             "peak_temp_c": peak,
+            "sensor": last_sensor,
             "aborted": False,
             "throttling_detected": throttling,
             "samples": samples,
@@ -1985,15 +2052,26 @@ def collect_advanced_health_summary(
         ("webcam",          "Webcam",                   collect_webcam_info, 20),
     ]
 
-    # Skip wifi check if network category skipped
-    if 'network' in skip:
-        checks = [(k, l, f, t) for k, l, f, t in checks if k != 'wifi']
-        results['wifi'] = {'status': 'skipped'}
-
-    # Skip webcam if display category skipped
-    if 'display' in skip:
-        checks = [(k, l, f, t) for k, l, f, t in checks if k != 'webcam']
-        results['webcam'] = {'status': 'skipped'}
+    skip_map = {
+        'event_viewer': 'event_logs',
+        'windows_update': 'windows_update',
+        'defender': 'defender',
+        'startup_impact': 'startup_items',
+        'device_manager': 'device_manager',
+        'power_plan': 'power_boot',
+        'boot_time': 'power_boot',
+        'wifi': 'network',
+        'webcam': 'display',
+    }
+    filtered_checks = []
+    for key, label, func, timeout in checks:
+        category_key = skip_map.get(key)
+        if category_key and category_key in skip:
+            results[key] = {'status': 'skipped'}
+            _log(f"  {label}: skipped\n")
+            continue
+        filtered_checks.append((key, label, func, timeout))
+    checks = filtered_checks
 
     # Skip idle temperature sampling if CPU, GPU, and RAM categories are all skipped.
     if {'cpu', 'gpu', 'ram'}.issubset(skip):

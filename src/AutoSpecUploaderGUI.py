@@ -41,7 +41,7 @@ from theme import COLORS, build_stylesheet
 from settings import (
     APP_NAME, APP_VERSION, load_settings, is_configured, is_first_run_setup_complete,
     get_app_dir, get_assets_dir, get_window_title, get_lhm_path,
-    get_active_api_key,
+    get_active_api_key, DEFAULT_UPLOAD_SCOPE,
 )
 from repairdesk_api import RepairDeskAPI
 from report_formatter import ReportFormatter
@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
         self._job_ticket_id     = ''
         self._job_ticket_info   = {}
         self._job_report_type   = ''
+        self._job_upload_scope  = DEFAULT_UPLOAD_SCOPE
         self._job_tech_notes    = ''
         self._job_skip_cats     = set()   # category keys to skip
 
@@ -554,6 +555,7 @@ class MainWindow(QMainWindow):
         self._job_ticket_id   = dlg.ticket_id
         self._job_ticket_info = dlg.ticket_info
         self._job_report_type = dlg.report_type
+        self._job_upload_scope = dlg.upload_scope
         self._job_tech_notes  = dlg.tech_notes
         self._job_skip_cats   = dlg.skip_categories
 
@@ -709,18 +711,18 @@ class MainWindow(QMainWindow):
         specs_with_context['_job_skip_cats']   = self._job_skip_cats
 
         formatter = ReportFormatter()
-        note_html = formatter.format_diagnostic_note(specs_with_context)
         issues = formatter._get_critical_issues_list(specs_with_context)
 
         logging.info("Generating report preview")
 
         # Show scan summary / upload dialog
         dlg = ReportPreviewDialog(
-            note_html, issues=issues, parent=self,
+            specs_with_context, formatter, issues=issues, parent=self,
             prefill_ticket=self._job_ticket_id,
             prefill_tech_name=self._job_tech_name,
             prefill_notes=self._job_tech_notes,
             ticket_already_confirmed=bool(self._job_ticket_info),
+            initial_upload_scope=self._job_upload_scope,
         )
         if dlg.exec() != ReportPreviewDialog.Accepted:
             logging.info("User closed preview without uploading")
@@ -728,6 +730,10 @@ class MainWindow(QMainWindow):
 
         ticket_id = dlg.ticket_id
         edited_note = dlg.edited_html
+        self._job_tech_name = dlg.tech_name or self._job_tech_name
+        self._job_tech_notes = dlg.tech_notes
+        self._job_upload_scope = dlg.upload_scope
+        self._update_header_context()
 
         # Refresh API — use tech's own API key if configured
         _upload_key, _upload_source = get_active_api_key(self._job_tech_name)

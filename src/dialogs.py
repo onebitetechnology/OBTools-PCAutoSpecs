@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPalette, QColor
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QTextEdit, QCheckBox, QWidget, QApplication,
     QScrollArea, QFrame, QProgressBar,
     QMessageBox,
@@ -22,7 +22,10 @@ from PySide6.QtWidgets import (
 from theme import COLORS
 from settings import (
     APP_NAME, APP_VERSION, load_settings, save_settings, is_configured, DEFAULTS,
-    SCAN_CATEGORIES, get_tech_names, get_tech_api_key, save_technicians,
+    SCAN_CATEGORIES, SCAN_CATEGORY_GROUPS,
+    UPLOAD_SCOPE_CHOICES, DEFAULT_UPLOAD_SCOPE,
+    UPLOAD_SCOPE_OVERVIEW, UPLOAD_SCOPE_FULL,
+    get_tech_names, get_tech_api_key, save_technicians,
     get_technicians,
 )
 from repairdesk_api import RepairDeskAPI
@@ -143,6 +146,7 @@ class StartupDialog(QDialog):
         ticket_id      (str)   — raw number, e.g. "15108"
         ticket_info    (dict)  — from API, or {} if not confirmed
         report_type    (str)   — "Initial Device Report" | "Final Device Report (Post Repair)"
+        upload_scope   (str)   — "overview" | "full"
         tech_notes     (str)
         skip_categories (set)  — category keys NOT selected
         skip_scan_requested (bool) — explicit request to leave without starting a scan
@@ -154,14 +158,15 @@ class StartupDialog(QDialog):
     def __init__(self, parent=None, prefill_tech_name=""):
         super().__init__(parent)
         self.setWindowTitle("Job Setup")
-        self.setMinimumWidth(560)
-        self.setMaximumWidth(680)
+        self.setMinimumWidth(720)
+        self.setMaximumWidth(860)
 
         # Result attributes (populated on accept or left as defaults on skip)
         self.tech_name       = ""
         self.ticket_id       = ""
         self.ticket_info     = {}
         self.report_type     = ""
+        self.upload_scope    = DEFAULT_UPLOAD_SCOPE
         self.tech_notes      = ""
         self.skip_categories = set()
         self.skip_scan_requested = False
@@ -357,6 +362,51 @@ class StartupDialog(QDialog):
         self._report_type_warning.setVisible(False)
         body_layout.addWidget(self._report_type_warning)
 
+        # ── Upload Scope ────────────────────────────────────────
+        body_layout.addWidget(_section_lbl("Upload Content"))
+
+        upload_row = QHBoxLayout()
+        upload_row.setSpacing(12)
+
+        self._upload_overview_btn = QPushButton("Upload System Overview only")
+        self._upload_overview_btn.setCheckable(True)
+        self._upload_overview_btn.setFixedHeight(50)
+        self._upload_overview_btn.setStyleSheet(_btn_base)
+
+        self._upload_full_btn = QPushButton("Upload full results")
+        self._upload_full_btn.setCheckable(True)
+        self._upload_full_btn.setFixedHeight(50)
+        self._upload_full_btn.setStyleSheet(_btn_base)
+
+        def _select_upload_scope(scope):
+            overview_selected = scope == UPLOAD_SCOPE_OVERVIEW
+            self._upload_overview_btn.setChecked(overview_selected)
+            self._upload_full_btn.setChecked(not overview_selected)
+            self._upload_overview_btn.setStyleSheet(
+                _btn_selected if overview_selected else _btn_base)
+            self._upload_full_btn.setStyleSheet(
+                _btn_selected if not overview_selected else _btn_base)
+            self.upload_scope = scope
+
+        self._upload_overview_btn.clicked.connect(
+            lambda: _select_upload_scope(UPLOAD_SCOPE_OVERVIEW))
+        self._upload_full_btn.clicked.connect(
+            lambda: _select_upload_scope(UPLOAD_SCOPE_FULL))
+        _select_upload_scope(DEFAULT_UPLOAD_SCOPE)
+
+        upload_row.addWidget(self._upload_overview_btn)
+        upload_row.addWidget(self._upload_full_btn)
+        body_layout.addLayout(upload_row)
+
+        upload_hint = QLabel(
+            "System Overview only uploads OS, CPU, RAM, and drive capacity usage. "
+            "Full results uploads the complete diagnostic report."
+        )
+        upload_hint.setWordWrap(True)
+        upload_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt;")
+        body_layout.addWidget(upload_hint)
+
         # ── Tech Notes ────────────────────────────────────────────
         body_layout.addWidget(_section_lbl(
             "Tech Notes  (optional — also editable at upload time)"))
@@ -375,38 +425,50 @@ class StartupDialog(QDialog):
         body_layout.addWidget(_section_lbl(
             "Tests to Run  (uncheck to skip — skipped tests noted in report)"))
 
-        cat_grid = QHBoxLayout()
-        cat_grid.setSpacing(12)
         self._category_checks = {}
-        for key, label in SCAN_CATEGORIES:
-            cb = QCheckBox(label)
-            cb.setChecked(True)
-            cb.setStyleSheet(f"""
-                QCheckBox {{
-                    color: {COLORS['console_text']};
-                    font-size: 10pt;
-                    spacing: 6px;
-                }}
-                QCheckBox::indicator {{
-                    width: 18px;
-                    height: 18px;
-                    border: 2px solid {COLORS['success']};
-                    border-radius: 4px;
-                    background: transparent;
-                }}
-                QCheckBox::indicator:unchecked {{
-                    background-color: transparent;
-                }}
-                QCheckBox::indicator:checked {{
-                    background-color: {COLORS['success']};
-                    border: 2px solid {COLORS['success']};
-                    image: url({_checkmark_svg_path()});
-                }}
-            """)
-            self._category_checks[key] = cb
-            cat_grid.addWidget(cb)
-        cat_grid.addStretch()
-        body_layout.addLayout(cat_grid)
+        checkbox_style = f"""
+            QCheckBox {{
+                color: {COLORS['console_text']};
+                font-size: 10pt;
+                spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+                border: 2px solid {COLORS['success']};
+                border-radius: 4px;
+                background: transparent;
+            }}
+            QCheckBox::indicator:unchecked {{
+                background-color: transparent;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {COLORS['success']};
+                border: 2px solid {COLORS['success']};
+                image: url({_checkmark_svg_path()});
+            }}
+        """
+
+        for group_name, categories in SCAN_CATEGORY_GROUPS:
+            group_lbl = QLabel(group_name)
+            group_lbl.setStyleSheet(
+                f"color: {COLORS['text_tertiary']}; font-size: 9pt; font-weight: bold;")
+            body_layout.addWidget(group_lbl)
+
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(20)
+            grid.setVerticalSpacing(10)
+
+            for index, (key, label) in enumerate(categories):
+                cb = QCheckBox(label)
+                cb.setChecked(True)
+                cb.setStyleSheet(checkbox_style)
+                self._category_checks[key] = cb
+                row = index // 2
+                col = index % 2
+                grid.addWidget(cb, row, col)
+
+            body_layout.addLayout(grid)
 
         # ── Buttons ───────────────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -554,6 +616,10 @@ class StartupDialog(QDialog):
             self.REPORT_TYPE_INITIAL if self._radio_initial.isChecked() else
             self.REPORT_TYPE_FINAL   if self._radio_final.isChecked() else
             ""
+        )
+        self.upload_scope = (
+            UPLOAD_SCOPE_OVERVIEW if self._upload_overview_btn.isChecked()
+            else UPLOAD_SCOPE_FULL
         )
         self.skip_categories = {
             key for key, cb in self._category_checks.items()
@@ -969,25 +1035,29 @@ class ReportPreviewDialog(QDialog):
     Editable — user enters ticket number and uploads from here.
 
     Usage:
-        dlg = ReportPreviewDialog(note_html, parent)
+        dlg = ReportPreviewDialog(specs, formatter, parent)
         if dlg.exec() == QDialog.Accepted:
             ticket_id = dlg.ticket_id    # e.g. "T-12345"
             edited_html = dlg.edited_html
     """
 
-    def __init__(self, note_html, issues=None, parent=None,
+    def __init__(self, specs, formatter, issues=None, parent=None,
                  prefill_ticket='', prefill_tech_name='', prefill_notes='',
-                 ticket_already_confirmed=False):
+                 ticket_already_confirmed=False,
+                 initial_upload_scope=DEFAULT_UPLOAD_SCOPE):
         super().__init__(parent)
         self.setWindowTitle("Scan Summary / Upload")
         self.resize(920, 780)
         self.setMinimumSize(700, 550)
 
-        self._original_html = note_html
-        self.edited_html = note_html
+        self._specs = dict(specs or {})
+        self._formatter = formatter
+        self._original_html = ""
+        self.edited_html = ""
         self.ticket_id = prefill_ticket or None
         self.tech_name = prefill_tech_name or ""
         self.tech_notes = prefill_notes or ""
+        self.upload_scope = initial_upload_scope or DEFAULT_UPLOAD_SCOPE
         self._issues = issues or []
         self._ticket_already_confirmed = ticket_already_confirmed
 
@@ -1029,7 +1099,7 @@ class ReportPreviewDialog(QDialog):
         self._name_input.setFixedHeight(34)
         self._name_input.setFixedWidth(160)
         s = load_settings()
-        self._name_input.setText(s.get('last_tech_name', ''))
+        self._name_input.setText(prefill_tech_name or s.get('last_tech_name', ''))
         self._name_input.textChanged.connect(self._on_fields_changed)
         fields_row.addWidget(self._name_input)
 
@@ -1100,6 +1170,68 @@ class ReportPreviewDialog(QDialog):
             "border-radius: 6px; padding: 8px; font-size: 10pt;")
         layout.addWidget(self._notes_input)
 
+        # ── Upload scope ────────────────────────────────────────
+        scope_lbl = QLabel("Upload Content")
+        scope_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10pt; font-weight: bold;")
+        layout.addWidget(scope_lbl)
+
+        btn_base = (
+            "QPushButton {"
+            "  border: 2px solid #374151;"
+            "  border-radius: 8px;"
+            "  padding: 10px 18px;"
+            "  font-size: 10.5pt;"
+            "  font-weight: bold;"
+            "  color: #9CA3AF;"
+            "  background-color: #1F2937;"
+            "}"
+            "QPushButton:hover {"
+            "  border-color: #6B7280;"
+            "  color: #D1D5DB;"
+            "  background-color: #374151;"
+            "}"
+        )
+        btn_selected = (
+            "QPushButton {"
+            "  border: 2px solid #10B981;"
+            "  border-radius: 8px;"
+            "  padding: 10px 18px;"
+            "  font-size: 10.5pt;"
+            "  font-weight: bold;"
+            "  color: #ffffff;"
+            "  background-color: #065F46;"
+            "}"
+        )
+
+        self._upload_scope_base = btn_base
+        self._upload_scope_selected = btn_selected
+
+        scope_row = QHBoxLayout()
+        scope_row.setSpacing(12)
+
+        self._upload_overview_btn = QPushButton("Upload System Overview only")
+        self._upload_overview_btn.setCheckable(True)
+        self._upload_overview_btn.setFixedHeight(46)
+        self._upload_overview_btn.clicked.connect(
+            lambda: self._set_upload_scope(UPLOAD_SCOPE_OVERVIEW))
+        scope_row.addWidget(self._upload_overview_btn)
+
+        self._upload_full_btn = QPushButton("Upload full results")
+        self._upload_full_btn.setCheckable(True)
+        self._upload_full_btn.setFixedHeight(46)
+        self._upload_full_btn.clicked.connect(
+            lambda: self._set_upload_scope(UPLOAD_SCOPE_FULL))
+        scope_row.addWidget(self._upload_full_btn)
+
+        layout.addLayout(scope_row)
+
+        self._scope_hint = QLabel()
+        self._scope_hint.setWordWrap(True)
+        self._scope_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt;")
+        layout.addWidget(self._scope_hint)
+
         # ── Report preview ───────────────────────────────────────
         preview_lbl = QLabel("Report Preview")
         preview_lbl.setStyleSheet(
@@ -1115,12 +1247,11 @@ class ReportPreviewDialog(QDialog):
             "font-family: 'Segoe UI', 'Arial', sans-serif; "
             "font-size: 10pt; "
             f"selection-background-color: {COLORS['primary']};")
-        self._editor.setHtml(note_html)
         layout.addWidget(self._editor, 1)
         layout.setContentsMargins(16, 0, 16, 0)
-        self._editor.document().setModified(False)
         self._editor.textChanged.connect(self._update_char_count)
-        self._update_char_count()
+        self._set_upload_scope(self.upload_scope, rebuild=False)
+        self._rebuild_preview()
 
         # ── Upload button ────────────────────────────────────────
         self._upload_btn = QPushButton()
@@ -1149,6 +1280,43 @@ class ReportPreviewDialog(QDialog):
         btn_bar.addWidget(close_btn)
 
         layout.addLayout(btn_bar)
+
+    def _set_upload_scope(self, scope, rebuild=True):
+        """Apply the active upload mode and optionally regenerate the preview."""
+        self.upload_scope = scope
+        overview_selected = scope == UPLOAD_SCOPE_OVERVIEW
+        self._upload_overview_btn.setChecked(overview_selected)
+        self._upload_full_btn.setChecked(not overview_selected)
+        self._upload_overview_btn.setStyleSheet(
+            self._upload_scope_selected if overview_selected else self._upload_scope_base)
+        self._upload_full_btn.setStyleSheet(
+            self._upload_scope_selected if not overview_selected else self._upload_scope_base)
+
+        if overview_selected:
+            self._scope_hint.setText(
+                "Uploads only OS version, CPU, RAM, and drive type/capacity usage."
+            )
+        else:
+            self._scope_hint.setText(
+                "Uploads the full diagnostic report, including detailed hardware and diagnostics."
+            )
+
+        if rebuild:
+            self._rebuild_preview()
+
+    def _rebuild_preview(self):
+        """Regenerate the preview HTML from the current specs and upload scope."""
+        note_html = self._formatter.format_diagnostic_note(
+            self._specs,
+            upload_mode=self.upload_scope,
+        )
+        self._original_html = note_html
+        self.edited_html = note_html
+        self._editor.blockSignals(True)
+        self._editor.setHtml(note_html)
+        self._editor.document().setModified(False)
+        self._editor.blockSignals(False)
+        self._update_char_count()
 
     # ── HTML extraction ──────────────────────────────────────────
 
@@ -1204,6 +1372,8 @@ class ReportPreviewDialog(QDialog):
         self._update_upload_button()
 
     def _on_fields_changed(self, text):
+        self._specs['_job_tech_name'] = self._name_input.text().strip()
+        self._rebuild_preview()
         self._update_upload_button()
 
     def _update_upload_button(self):

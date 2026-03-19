@@ -529,31 +529,38 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
                 specs['GPUMetrics'] = gpu_metrics
         _emit_specs()
 
-    # Motherboard - Enhanced (validated)
-    log_message("Detecting Motherboard...")
-    specs['Motherboard'] = _get_motherboard_info(com_wmi)
-    if specs['Motherboard']:
-        log_message(f" {specs['Motherboard']}\n")
-    
-    # Chipset - Extract from motherboard (shows platform generation)
-    chipset = _extract_chipset_from_motherboard(specs.get('Motherboard', ''))
-    if chipset:
-        specs['Chipset'] = chipset
-        # Get chipset-level specs (JEDEC speeds, memory type, channels)
-        chipset_specs = _get_chipset_specs(chipset)
-        if chipset_specs:
-            specs['ChipsetSpecs'] = chipset_specs
-    else:
+    # Motherboard / BIOS
+    if 'motherboard' in skip:
+        log_message("Skipping Motherboard & BIOS tests...\n")
+        specs['Motherboard'] = 'Test skipped'
         specs['Chipset'] = None
         specs['ChipsetSpecs'] = None
-    
-    # Motherboard RAM specs - From verified motherboard database (actual max RAM)
-    mobo_specs = _get_motherboard_specs(specs.get('Motherboard', ''))
-    if mobo_specs:
-        specs['MotherboardSpecs'] = mobo_specs
-    else:
-        # Unknown board - show fallback message in GUI
         specs['MotherboardSpecs'] = None
+    else:
+        log_message("Detecting Motherboard...")
+        specs['Motherboard'] = _get_motherboard_info(com_wmi)
+        if specs['Motherboard']:
+            log_message(f" {specs['Motherboard']}\n")
+
+        # Chipset - Extract from motherboard (shows platform generation)
+        chipset = _extract_chipset_from_motherboard(specs.get('Motherboard', ''))
+        if chipset:
+            specs['Chipset'] = chipset
+            # Get chipset-level specs (JEDEC speeds, memory type, channels)
+            chipset_specs = _get_chipset_specs(chipset)
+            if chipset_specs:
+                specs['ChipsetSpecs'] = chipset_specs
+        else:
+            specs['Chipset'] = None
+            specs['ChipsetSpecs'] = None
+
+        # Motherboard RAM specs - From verified motherboard database (actual max RAM)
+        mobo_specs = _get_motherboard_specs(specs.get('Motherboard', ''))
+        if mobo_specs:
+            specs['MotherboardSpecs'] = mobo_specs
+        else:
+            # Unknown board - show fallback message in GUI
+            specs['MotherboardSpecs'] = None
     _emit_specs()
 
     # Battery - Enhanced with health (validated)
@@ -603,12 +610,16 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
         _emit_specs()
 
     # BIOS Information - Enhanced (validated) - returns (first_line, remaining_lines)
-    log_message("Detecting BIOS...")
-    bios_first, bios_details = _get_bios_info(com_wmi)
-    specs['BIOS'] = bios_first
-    specs['BIOSDetails'] = bios_details
-    if bios_first:
-        log_message(f" {bios_first}\n")
+    if 'motherboard' in skip:
+        specs['BIOS'] = 'Test skipped'
+        specs['BIOSDetails'] = []
+    else:
+        log_message("Detecting BIOS...")
+        bios_first, bios_details = _get_bios_info(com_wmi)
+        specs['BIOS'] = bios_first
+        specs['BIOSDetails'] = bios_details
+        if bios_first:
+            log_message(f" {bios_first}\n")
     _emit_specs()
 
     # Driver Information - Enhanced
@@ -692,18 +703,23 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
     _emit_specs()
 
     # Recent Critical Errors
-    specs['RecentErrors'] = _get_recent_critical_errors()
+    specs['RecentErrors'] = [] if 'event_logs' in skip else _get_recent_critical_errors()
 
     # Advanced Diagnostics
     log_message("Running diagnostics...")
+    def _diag_or_skipped(category_key, getter):
+        if category_key in skip:
+            return ('Test skipped', 'skipped')
+        return getter()
+
     specs['AdvancedDiagnostics'] = {
-        'EventLog': _get_event_log_summary(),
-        'WindowsUpdate': _get_windows_update_status(),
-        'Defender': _get_defender_status(),
-        'StartupItems': _get_startup_items(),
-        'DeviceManager': _get_device_manager_issues(),
-        'PowerPlan': _get_power_plan(),
-        'BootTime': _get_boot_time()
+        'EventLog': _diag_or_skipped('event_logs', _get_event_log_summary),
+        'WindowsUpdate': _diag_or_skipped('windows_update', _get_windows_update_status),
+        'Defender': _diag_or_skipped('defender', _get_defender_status),
+        'StartupItems': _diag_or_skipped('startup_items', _get_startup_items),
+        'DeviceManager': _diag_or_skipped('device_manager', _get_device_manager_issues),
+        'PowerPlan': _diag_or_skipped('power_boot', _get_power_plan),
+        'BootTime': _diag_or_skipped('power_boot', _get_boot_time)
     }
 
     # Promote to top-level keys for report formatter
@@ -2252,6 +2268,7 @@ def _get_gpu_detailed_metrics(gpu_name):
                 if len(parts) >= 6:
                     try:
                         metrics['temperature'] = int(parts[0].strip())
+                        metrics['temperature_sensor'] = 'GPU Core (nvidia-smi)'
                         metrics['core_clock'] = int(parts[1].strip())
                         metrics['memory_clock'] = int(parts[2].strip())
                         metrics['power_draw'] = float(parts[3].strip())
@@ -2306,6 +2323,7 @@ def _get_gpu_detailed_metrics(gpu_name):
                 amd_data = json.loads(result.stdout.strip())
                 if amd_data.get('temperature'):
                     metrics['temperature'] = amd_data['temperature']
+                    metrics['temperature_sensor'] = 'ACPI Thermal Zone'
                 logging.info(f"AMD GPU metrics: {metrics}")
                 return metrics
         except (subprocess.TimeoutExpired, ValueError, json.JSONDecodeError, Exception) as e:
