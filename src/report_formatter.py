@@ -264,11 +264,11 @@ class ReportFormatter:
             for line in storage_text.split('\n'):
                 line = line.strip()
                 if line:
-                    drive_type = self._classify_drive_type_from_line(line)
+                    drive_type = self._classify_drive_type_from_storage_health(
+                        line, storage_health
+                    )
                     if not drive_type:
-                        drive_type = self._classify_drive_type_from_storage_health(
-                            line, storage_health
-                        )
+                        drive_type = self._classify_drive_type_from_line(line)
                     if drive_type:
                         line += f" ({drive_type})"
                     usage_lines.append(line)
@@ -294,7 +294,16 @@ class ReportFormatter:
 
     @staticmethod
     def _classify_drive_type(drive):
+        bus_type = (drive.get('bus_type') or '').upper()
         model = (drive.get('model') or '').upper()
+        if bus_type == 'NVME':
+            return 'NVMe SSD'
+        if bus_type == 'SATA' and ('SSD' in model or drive.get('percentage_used') is not None):
+            return 'SATA SSD'
+        if bus_type == 'SATA' and (drive.get('media_type', '').upper() == 'HDD' or drive.get('reallocated_sectors') is not None):
+            return 'HDD'
+        if bus_type == 'USB':
+            return 'USB'
         if 'NVME' in model or 'NVM' in model or drive.get('available_spare') is not None:
             return 'NVMe SSD'
         if 'USB' in model or drive.get('status') == 'N/A':
@@ -318,7 +327,7 @@ class ReportFormatter:
             return 'NVMe SSD'
         if 'SSD' in upper:
             return 'SATA SSD'
-        if 'HDD' in upper or 'HARD DISK' in upper:
+        if 'HDD' in upper:
             return 'HDD'
         return None
 
@@ -446,6 +455,7 @@ class ReportFormatter:
         """Return just the list of critical issue strings — used by the scan summary popup."""
         issues = []
         skip_cats = specs.get('_job_skip_cats', set())
+        ethernet_connected = bool(specs.get('_ethernet_connected'))
 
         # Storage
         if 'storage' not in skip_cats:
@@ -548,7 +558,8 @@ class ReportFormatter:
             if is_laptop:
                 issues.append("WiFi: No wireless adapter detected — unusual for a laptop")
         elif wifi_status == 'disconnected':
-            issues.append("WiFi: Adapter present but not connected")
+            if not ethernet_connected:
+                issues.append("WiFi: Adapter present but not connected")
         elif wifi_status == 'permission_required':
             pass
         elif wifi_status == 'ok':
@@ -578,6 +589,7 @@ class ReportFormatter:
         lines = []
         issues = []
         skip_cats = specs.get('_job_skip_cats', set())
+        ethernet_connected = bool(specs.get('_ethernet_connected'))
 
         # Check storage health using unified assessment
         if 'storage' not in skip_cats:
@@ -649,6 +661,15 @@ class ReportFormatter:
                 issues.append(f"CPU Temp (Load): HIGH ({peak:.0f}°C — cooling service recommended)")
 
         # Only show critical issues if there ARE any — no "all clear" filler
+        wifi = advanced.get('wifi', {})
+        wifi_status = wifi.get('status')
+        is_laptop = str(specs.get('SystemType', '')).lower() in ('laptop', 'notebook', 'tablet')
+        if 'network' not in skip_cats:
+            if wifi_status == 'no_adapter' and is_laptop:
+                issues.append("WiFi: No wireless adapter detected — unusual for a laptop")
+            elif wifi_status == 'disconnected' and not ethernet_connected:
+                issues.append("WiFi: Adapter present but not connected")
+
         if issues:
             lines.append("<strong>CRITICAL ISSUES</strong>")
             for issue in issues:

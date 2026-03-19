@@ -553,6 +553,7 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
     # Network Adapters - Basic inventory is always collected; skip only affects WiFi diagnostics.
     log_message("Detecting Network...")
     specs['Network'] = _get_network_info(com_wmi)
+    specs['_ethernet_connected'] = _has_connected_ethernet(com_wmi)
     if specs['Network']:
         adapter_count = specs['Network'].count('\n') + 1 if specs['Network'] else 0
         log_message(f" {adapter_count} adapter(s)\n")
@@ -2968,6 +2969,59 @@ def _get_network_info(com_wmi):
         return "Network information unavailable"
 
 
+def _has_connected_ethernet(com_wmi):
+    """Return True when a physical wired adapter is actively connected."""
+    ETHERNET_KEYWORDS = (
+        'ethernet', 'gigabit', 'gbe', '2.5gbe', '5gbe', '10gbe',
+        'realtek pcie', 'intel(r) ethernet', 'local area connection'
+    )
+    WIFI_KEYWORDS = ('wireless', 'wi-fi', 'wifi', 'wlan', '802.11')
+    VIRTUAL_KEYWORDS = (
+        'vmware', 'virtualbox', 'vbox', 'hyper-v', 'wan miniport',
+        'bluetooth device (personal area network)', 'bluetooth pan',
+        'tap-windows', 'virtual', 'loopback'
+    )
+
+    def _looks_like_physical_ethernet(name):
+        if not name:
+            return False
+        lowered = name.lower()
+        if any(word in lowered for word in VIRTUAL_KEYWORDS):
+            return False
+        if any(word in lowered for word in WIFI_KEYWORDS):
+            return False
+        return any(word in lowered for word in ETHERNET_KEYWORDS)
+
+    try:
+        if not com_wmi:
+            return False
+
+        items = _query_com_wmi(com_wmi, "Win32_NetworkAdapter")
+        if not items:
+            return False
+
+        for i in range(items.Count):
+            nic = items.ItemIndex(i)
+            try:
+                physical = nic.Properties_("PhysicalAdapter").Value
+                if not physical:
+                    continue
+
+                name = nic.Properties_("Name").Value or ""
+                if not _looks_like_physical_ethernet(name):
+                    continue
+
+                net_status = nic.Properties_("NetConnectionStatus").Value
+                if str(net_status) == '2':
+                    return True
+            except Exception:
+                continue
+    except Exception as e:
+        logging.debug(f"Failed to determine Ethernet connectivity: {e}")
+
+    return False
+
+
 def _parse_edid_data(edid_bytes):
     """Parse EDID data to extract manufacturer, model, etc."""
     try:
@@ -4362,6 +4416,7 @@ def _get_disk_smart_structured(disk_index):
                     # Build output from Windows data
                     $output = "$winStatus|$winHealth"
                     if ($mediaType) { $output += "|MediaType:$mediaType" }
+                    if ($busType) { $output += "|BusType:$busType" }
                     if ($relHours) { $output += "|PowerOnHours:$relHours" }
                     if ($relTemp) { $output += "|Temperature:$relTemp" }
                     if ($relWear) { $output += "|PercentageUsed:$relWear" }
@@ -4591,6 +4646,7 @@ def _get_disk_smart_structured(disk_index):
                     # Build comprehensive output with all diagnostic data
                     $output = "$status|$healthPercent"
                     if ($mediaType) { $output += "|MediaType:$mediaType" }
+                    if ($busType) { $output += "|BusType:$busType" }
                     if ($powerOnHours) { $output += "|PowerOnHours:$powerOnHours" }
                     if ($temperature) { $output += "|Temperature:$temperature" }
                     if ($reallocatedSectors -ne $null) { $output += "|ReallocatedSectors:$reallocatedSectors" }
@@ -4656,6 +4712,8 @@ def _get_disk_smart_structured(disk_index):
                     key, value = part.split(':', 1)
                     if key == 'MediaType':
                         smart_data['media_type'] = value
+                    elif key == 'BusType':
+                        smart_data['bus_type'] = value
                     elif key == 'PowerOnHours':
                         try:
                             smart_data['power_on_hours'] = int(value)

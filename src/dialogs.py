@@ -122,12 +122,23 @@ def _make_msgbox(parent, title, text, buttons=None, default=None):
     if default is not None:
         box.setDefaultButton(default)
 
+    # Force the main text label to wrap and reserve enough width before the
+    # final size calculation, otherwise Windows DPI scaling can clip longer
+    # confirmation prompts like the updater install dialog.
+    box.ensurePolished()
+    for label in box.findChildren(QLabel):
+        if label.text() == text:
+            label.setWordWrap(True)
+            label.setMinimumWidth(520)
+            label.setMaximumWidth(720)
+            break
+
     # Force the final wrapped size before centering so text does not clip on
     # Windows DPI scaling, especially for multi-line confirmation prompts.
     box.layout().activate()
     box.adjustSize()
     hint = box.sizeHint()
-    box.resize(max(560, hint.width()), max(180, hint.height()))
+    box.resize(max(620, hint.width()), max(200, hint.height()))
 
     # Centre over the real parent window using the final size hint so text
     # and buttons are not clipped on scaled Windows displays.
