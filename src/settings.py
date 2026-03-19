@@ -112,8 +112,6 @@ def is_first_run_setup_complete():
     required_fields = (
         settings.get('store_name', '').strip(),
         settings.get('api_key', '').strip(),
-        settings.get('wifi_ssid', '').strip(),
-        settings.get('wifi_password', '').strip(),
     )
     return all(required_fields)
 

@@ -7,6 +7,7 @@ Version 1.0
 
 import sys
 import os
+import tempfile
 
 # ── Vendor path injection ──────────────────────────────────────────────
 # Adds the USB's vendor/ folder to sys.path so bundled packages (wmi, etc.)
@@ -28,7 +29,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QLockFile
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -47,6 +48,9 @@ from report_formatter import ReportFormatter
 from panels import SystemInfoPanel, ActivityLogPanel
 from dialogs import SettingsDialog, ReportPreviewDialog, WelcomeDialog, StressTestDialog, ScanSummaryDialog, StartupDialog
 from workers import SpecCollectorWorker, UploadWorker, GpuMonitorWorker
+
+
+_APP_INSTANCE_LOCK = None
 
 
 # ─── Logging ──────────────────────────────────────────────────────────
@@ -99,6 +103,23 @@ def check_admin_privileges():
         return False
 
 
+def acquire_single_instance_lock():
+    """Prevent multiple copies of the app from running at the same time."""
+    global _APP_INSTANCE_LOCK
+
+    lock_root = Path(os.environ.get('LOCALAPPDATA') or tempfile.gettempdir())
+    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_root / "PCAutoSpec.lock"
+
+    lock = QLockFile(str(lock_path))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(100):
+        return None
+
+    _APP_INSTANCE_LOCK = lock
+    return lock
+
+
 # ─── Main Window ──────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -116,6 +137,7 @@ class MainWindow(QMainWindow):
         self._system_specs = {}
         self._gpu_worker = None
         self._lhm_process = None  # LibreHardwareMonitor subprocess
+        self._lhm_launched = False
 
         # Job context — set by StartupDialog, carried into scan + report
         self._job_tech_name     = self._settings.get('last_tech_name', '')
@@ -238,7 +260,7 @@ class MainWindow(QMainWindow):
         try:
             self._start_lhm()
             self._ensure_wifi()
-            if self._lhm_launched:
+            if self._lhm_launched or self._is_lhm_web_server_available() or self._count_running_lhm_processes() > 0:
                 self._check_temp_sensor()
             else:
                 logging.info("LHM not launched — skipping temp sensor wait")
@@ -329,6 +351,24 @@ class MainWindow(QMainWindow):
                 "CPU temperature unavailable\n", 'warning')
             logging.warning(f"LHM not found at: {lhm_path}")
             return
+
+        # If LHM is already serving data or already running, reuse it.
+        if self._is_lhm_web_server_available():
+            logging.info("LibreHardwareMonitor web server already available — reusing existing instance")
+            self._lhm_process = None
+            self._lhm_launched = False
+            return
+
+        running_count = self._count_running_lhm_processes()
+        if running_count > 0:
+            logging.info(
+                f"LibreHardwareMonitor already running ({running_count} instance(s)) — "
+                "reusing existing process"
+            )
+            self._lhm_process = None
+            self._lhm_launched = False
+            return
+
         # Write config first so web server is enabled when LHM launches
         self._write_lhm_config()
         try:
@@ -351,6 +391,41 @@ class MainWindow(QMainWindow):
             logging.warning(f"Failed to launch LHM: {e}")
             self._lhm_process  = None
             self._lhm_launched = False
+
+    def _is_lhm_web_server_available(self):
+        """True when LHM's local web server is already serving sensor data."""
+        try:
+            import json
+            import urllib.request
+
+            req = urllib.request.Request(
+                "http://localhost:8085/data.json",
+                headers={"User-Agent": "PCAutoSpec"},
+            )
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            return bool(data.get('Children'))
+        except Exception:
+            return False
+
+    def _count_running_lhm_processes(self):
+        """Count running LibreHardwareMonitor processes without shelling out."""
+        try:
+            import psutil
+
+            count = 0
+            for proc in psutil.process_iter(['name', 'exe']):
+                try:
+                    name = (proc.info.get('name') or '').lower()
+                    exe = (proc.info.get('exe') or '').lower()
+                    if 'librehardwaremonitor' in name or 'librehardwaremonitor' in exe:
+                        count += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            return count
+        except Exception as e:
+            logging.debug(f"Could not count running LHM processes: {e}")
+            return 0
 
     def _stop_lhm(self):
         """Terminate LibreHardwareMonitor if we launched it."""
@@ -465,8 +540,7 @@ class MainWindow(QMainWindow):
             return
         result = dlg.exec()
 
-        # Accepted = "Start Scan", Rejected = "Skip"
-        # Either way, collect whatever was entered
+        # Collect whatever was entered before deciding whether to scan.
         self._job_tech_name   = dlg.tech_name   or self._job_tech_name
         self._job_ticket_id   = dlg.ticket_id
         self._job_ticket_info = dlg.ticket_info
@@ -476,6 +550,13 @@ class MainWindow(QMainWindow):
 
         # Update header subtitle to show tech + ticket if available
         self._update_header_context()
+
+        if result != StartupDialog.Accepted:
+            if dlg.skip_scan_requested:
+                logging.info("Job setup skipped — not starting a scan")
+            else:
+                logging.info("Job setup dismissed — not starting a scan")
+            return
 
         self._start_spec_collection()
 
@@ -835,6 +916,16 @@ def main():
     # Create Qt application
     app = QApplication(sys.argv)
     app.setStyleSheet(build_stylesheet())
+
+    if not acquire_single_instance_lock():
+        logging.warning("Another PC AutoSpec instance is already running; exiting duplicate launch")
+        QMessageBox.warning(
+            None,
+            "Already Running",
+            "PC AutoSpec is already open on this machine.\n\n"
+            "Close the existing window before starting another copy."
+        )
+        sys.exit(0)
 
     # First use — require initial setup before loading the main window
     if not is_first_run_setup_complete():

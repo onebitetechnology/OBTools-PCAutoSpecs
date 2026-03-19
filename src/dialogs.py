@@ -131,7 +131,7 @@ def _make_msgbox(parent, title, text, buttons=None, default=None):
 
 class StartupDialog(QDialog):
     """
-    Shown at startup before every scan (skippable via X).
+    Shown at startup before every scan.
     Tech enters: name, ticket ID (with confirmation), report type,
     tech notes, and selects which test categories to run.
 
@@ -142,6 +142,7 @@ class StartupDialog(QDialog):
         report_type    (str)   — "Initial Device Report" | "Final Device Report (Post Repair)"
         tech_notes     (str)
         skip_categories (set)  — category keys NOT selected
+        skip_scan_requested (bool) — explicit request to leave without starting a scan
     """
 
     REPORT_TYPE_INITIAL = "Initial Device Report"
@@ -160,6 +161,7 @@ class StartupDialog(QDialog):
         self.report_type     = ""
         self.tech_notes      = ""
         self.skip_categories = set()
+        self.skip_scan_requested = False
 
         self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
 
@@ -408,7 +410,7 @@ class StartupDialog(QDialog):
         btn_row.setContentsMargins(0, 12, 0, 16)
         btn_row.setSpacing(10)
 
-        skip_btn = QPushButton("Skip — Start Scan Anyway")
+        skip_btn = QPushButton("Skip, Don't Scan")
         skip_btn.setObjectName("secondary")
         skip_btn.setFixedHeight(40)
         skip_btn.setCursor(Qt.PointingHandCursor)
@@ -564,6 +566,7 @@ class StartupDialog(QDialog):
 
     def _on_start(self):
         """Validate report type then accept."""
+        self.skip_scan_requested = False
         if not self._radio_initial.isChecked() and not self._radio_final.isChecked():
             self._report_type_warning.setVisible(True)
             return
@@ -572,15 +575,15 @@ class StartupDialog(QDialog):
         self.accept()
 
     def _on_skip(self):
-        """Dismiss without validation — tech fills in later."""
+        """Dismiss without starting a scan."""
+        self.skip_scan_requested = True
         self._collect_results()
-        # If no report type selected on skip, leave blank
         self.reject()
 
 # ─── Welcome / First-Run Dialog ─────────────────────────────────────
 
 class WelcomeDialog(QDialog):
-    """First-run setup dialog for store, RepairDesk, and shop WiFi settings."""
+    """First-run setup dialog for store, RepairDesk, and optional shop WiFi settings."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -605,7 +608,7 @@ class WelcomeDialog(QDialog):
 
         subtitle = QLabel(
             "Enter your shop details before the first scan. "
-            "These settings are saved next to the app and can be changed later."
+            "WiFi is optional and can be added later in Settings."
         )
         subtitle.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 11px;")
@@ -656,7 +659,7 @@ class WelcomeDialog(QDialog):
         layout.addLayout(key_row)
 
         # WiFi SSID
-        wifi_label = QLabel("Shop WiFi SSID")
+        wifi_label = QLabel("Shop WiFi SSID  (optional)")
         wifi_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 10px; "
             "font-weight: bold;")
@@ -669,7 +672,7 @@ class WelcomeDialog(QDialog):
         layout.addWidget(self._wifi_ssid_input)
 
         # WiFi password
-        wifi_pass_label = QLabel("Shop WiFi Password")
+        wifi_pass_label = QLabel("Shop WiFi Password  (optional)")
         wifi_pass_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 10px; "
             "font-weight: bold;")
@@ -714,7 +717,7 @@ class WelcomeDialog(QDialog):
         self._save_btn.clicked.connect(self._on_save)
         layout.addWidget(self._save_btn)
 
-        # Enable save when all fields have content
+        # Enable save when required fields have content
         self._store_input.textChanged.connect(self._check_fields)
         self._key_input.textChanged.connect(self._check_fields)
         self._wifi_ssid_input.textChanged.connect(self._check_fields)
@@ -724,19 +727,17 @@ class WelcomeDialog(QDialog):
     def _check_fields(self):
         has_store = len(self._store_input.text().strip()) > 0
         has_key = len(self._key_input.text().strip()) > 5
-        has_wifi_ssid = len(self._wifi_ssid_input.text().strip()) > 0
-        has_wifi_password = len(self._wifi_pass_input.text().strip()) > 0
-        self._save_btn.setEnabled(
-            has_store and has_key and has_wifi_ssid and has_wifi_password
-        )
+        self._save_btn.setEnabled(has_store and has_key)
 
     def _on_save(self):
+        wifi_ssid = self._wifi_ssid_input.text().strip()
+        wifi_password = self._wifi_pass_input.text().strip()
         settings = load_settings()
         settings['store_name'] = self._store_input.text().strip()
         settings['api_key'] = self._key_input.text().strip()
-        settings['wifi_ssid'] = self._wifi_ssid_input.text().strip()
-        settings['wifi_password'] = self._wifi_pass_input.text().strip()
-        settings['wifi_auto_connect'] = True
+        settings['wifi_ssid'] = wifi_ssid
+        settings['wifi_password'] = wifi_password
+        settings['wifi_auto_connect'] = bool(wifi_ssid)
         save_settings(settings)
         self.accept()
 
@@ -1875,6 +1876,8 @@ class SettingsDialog(QDialog):
             app.quit()
 
     def _on_save(self):
+        wifi_ssid = self._wifi_ssid_input.text().strip()
+        wifi_password = self._wifi_pass_input.text().strip()
         self.saved_settings = {
             'store_name': self._store_input.text().strip(),
             'api_key': self._api_key_input.text().strip(),
@@ -1882,9 +1885,9 @@ class SettingsDialog(QDialog):
                              or DEFAULTS['api_base_url']),
             'tickets_per_page': self._settings.get(
                 'tickets_per_page', DEFAULTS['tickets_per_page']),
-            'wifi_ssid': self._wifi_ssid_input.text().strip(),
-            'wifi_password': self._wifi_pass_input.text().strip(),
-            'wifi_auto_connect': True,
+            'wifi_ssid': wifi_ssid,
+            'wifi_password': wifi_password,
+            'wifi_auto_connect': bool(wifi_ssid),
             # Save technician names from inline fields (empty fields ignored)
             'technicians': [{'name': f.text().strip()}
                             for f in self._tech_name_fields if f.text().strip()],
