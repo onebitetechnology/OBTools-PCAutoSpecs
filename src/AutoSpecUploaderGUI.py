@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         self._gpu_worker = None
         self._lhm_process = None  # LibreHardwareMonitor subprocess
         self._lhm_launched = False
+        self._scan_in_progress = False
 
         # Job context — set by StartupDialog, carried into scan + report
         self._job_tech_name     = self._settings.get('last_tech_name', '')
@@ -200,6 +201,14 @@ class MainWindow(QMainWindow):
         h_layout.addLayout(title_col)
 
         h_layout.addStretch()
+
+        self._job_btn = QPushButton("Job")
+        self._job_btn.setObjectName("secondary")
+        self._job_btn.setFixedSize(72, 40)
+        self._job_btn.setCursor(Qt.PointingHandCursor)
+        self._job_btn.setToolTip("Open Job Setup")
+        self._job_btn.clicked.connect(self._open_job_setup)
+        h_layout.addWidget(self._job_btn)
 
         settings_btn = QPushButton("\u2699")
         settings_btn.setObjectName("flat")
@@ -554,6 +563,14 @@ class MainWindow(QMainWindow):
         if result != StartupDialog.Accepted:
             if dlg.skip_scan_requested:
                 logging.info("Job setup skipped — not starting a scan")
+                self._system_specs = {}
+                self._info_panel.show_scan_skipped()
+                self._info_panel.set_button_enabled(False)
+                self._info_panel.set_button_text("Scan Summary / Upload")
+                self._status_bar.showMessage("Scan skipped — use Job to start later")
+                self._log_panel.append(
+                    "  Scan skipped — use Job to enter details and start later.\n",
+                    'warning')
             else:
                 logging.info("Job setup dismissed — not starting a scan")
             return
@@ -579,6 +596,11 @@ class MainWindow(QMainWindow):
 
     def _start_spec_collection(self):
         logging.info("Starting system specifications collection")
+        self._scan_in_progress = True
+        self._job_btn.setEnabled(False)
+        if self._gpu_worker:
+            self._gpu_worker.stop()
+            self._gpu_worker = None
         self._info_panel.set_button_enabled(False)
         self._info_panel.set_button_text("⏳ Scanning...")
         self._info_panel.spinner.start()
@@ -622,6 +644,8 @@ class MainWindow(QMainWindow):
             self._info_panel.spinner.set_phase(stripped)
 
     def _on_specs_collected(self, specs):
+        self._scan_in_progress = False
+        self._job_btn.setEnabled(True)
         self._system_specs = specs
         self._info_panel.spinner.stop()
         self._info_panel.update_from_specs(specs)
@@ -647,6 +671,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(600, self._on_preview)
 
     def _on_specs_error(self, error_msg):
+        self._scan_in_progress = False
+        self._job_btn.setEnabled(True)
         self._info_panel.spinner.stop()
         self._log_panel.append(
             f"  \u2717 Error collecting specs: {error_msg}\n\n", 'error')
@@ -801,6 +827,13 @@ class MainWindow(QMainWindow):
         if dlg.exec() == SettingsDialog.Accepted and dlg.saved_settings:
             self._settings = dlg.saved_settings
             self._api = RepairDeskAPI()
+
+    def _open_job_setup(self):
+        """Re-open the Job Setup dialog when the app is idle."""
+        if self._scan_in_progress:
+            self._status_bar.showMessage("Scan already running")
+            return
+        self._show_startup_dialog()
 
     # ── Cleanup ───────────────────────────────────────────────────
 

@@ -202,6 +202,36 @@ class SystemInfoPanel(QWidget):
                 f"background-color: #444444; color: #888888;"
                 f"{btn_base}")
 
+    def show_scan_skipped(self):
+        """Render all sections in a clear idle state after the tech skips scanning."""
+        self._specs = {}
+        self._spinner.stop()
+        self._spinner.hide()
+
+        static_sections = (
+            self._sec_overview,
+            self._sec_cpu,
+            self._sec_ram,
+            self._sec_gpu,
+            self._sec_mobo,
+            self._sec_battery,
+            self._sec_adv,
+        )
+        for section in static_sections:
+            section.clear_dynamic()
+            for row_name in section._static_rows:
+                section.set_row_value(row_name, "Test skipped", COLORS['warning'])
+
+        dynamic_sections = (
+            self._sec_storage,
+            self._sec_network,
+            self._sec_monitors,
+        )
+        for section in dynamic_sections:
+            section.clear_dynamic()
+            section.add_info_row('Status', 'Test skipped', bold=True,
+                                 color=COLORS['warning'])
+
     # Map spec keys → section updater methods
     _SECTION_KEYS = {
         '_update_system_overview': {

@@ -85,7 +85,10 @@ def get_pending_update() -> Optional[Dict]:
         return None
 
     installer_path = Path(metadata.get("installer_path", ""))
-    if not installer_path.is_file():
+    pending_version = _normalize_version(metadata.get("version"))
+    if (not installer_path.is_file()
+            or not pending_version
+            or _version_key(pending_version) <= _version_key(APP_VERSION)):
         _clear_pending_metadata()
         return None
 
@@ -169,7 +172,18 @@ def check_for_updates(timeout: int = 20) -> Dict:
         state["message"] = "Latest release did not include a valid version."
         return state
 
-    if _version_key(latest_version) <= _version_key(APP_VERSION):
+    current_key = _version_key(APP_VERSION)
+    latest_key = _version_key(latest_version)
+
+    if latest_key < current_key:
+        state["available"] = False
+        state["message"] = (
+            f"Installed version {APP_VERSION} is newer than the latest "
+            f"published release ({latest_version})."
+        )
+        return state
+
+    if latest_key == current_key:
         state["available"] = False
         state["message"] = f"App is up to date. Current version: {APP_VERSION}"
         return state

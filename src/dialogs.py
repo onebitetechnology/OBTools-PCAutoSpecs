@@ -100,14 +100,7 @@ def _make_msgbox(parent, title, text, buttons=None, default=None):
     box.setWindowTitle(title)
     box.setText(text)
     box.setWindowModality(Qt.WindowModality.ApplicationModal)
-
-    # Centre over the real parent window
-    if parent is not None:
-        geo = parent.geometry()
-        box.move(
-            geo.x() + (geo.width()  - 460) // 2,
-            geo.y() + (geo.height() - 180) // 2,
-        )
+    box.setMinimumWidth(460)
 
     # Light palette so text is readable
     pal = QPalette()
@@ -124,6 +117,16 @@ def _make_msgbox(parent, title, text, buttons=None, default=None):
         box.setStandardButtons(buttons)
     if default is not None:
         box.setDefaultButton(default)
+
+    # Centre over the real parent window using the final size hint so text
+    # and buttons are not clipped on scaled Windows displays.
+    if parent is not None:
+        hint = box.sizeHint()
+        geo = parent.geometry()
+        box.move(
+            geo.x() + max(0, (geo.width() - hint.width()) // 2),
+            geo.y() + max(0, (geo.height() - hint.height()) // 2),
+        )
     return box
 
 
@@ -1782,7 +1785,7 @@ class SettingsDialog(QDialog):
 
     def _on_update_check_finished(self, info):
         self._check_worker = None
-        self._update_info.update(info)
+        self._update_info = dict(info)
         latest_version = info.get('latest_version') or "Not available"
         self._update_latest_version.setText(str(latest_version))
 
@@ -1831,6 +1834,8 @@ class SettingsDialog(QDialog):
     def _on_update_download_finished(self, result):
         self._download_worker = None
         self._update_info.update({
+            'supported': True,
+            'available': True,
             'downloaded': True,
             'installer_path': result.get('installer_path'),
             'latest_version': result.get('version') or self._update_info.get('latest_version'),
