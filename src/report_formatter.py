@@ -105,7 +105,7 @@ class ReportFormatter:
             'System Health':            '&#x1FA7A;',  # 🩺  stethoscope
         }
 
-        def _style_line(line):
+        def _style_line(line, is_first_section=False):
             """
             Convert a plain <strong>Section Name</strong> header line into a
             styled section header with emoji and a top rule.
@@ -121,9 +121,12 @@ class ReportFormatter:
             if title not in SECTION_EMOJI:
                 return line
             emoji = SECTION_EMOJI[title]
-            return (
+            rule = "" if is_first_section else (
                 f"<hr style='border:none;border-top:2px solid #2563EB;"
                 f"margin:10px 0 6px 0;'>"
+            )
+            return (
+                f"{rule}"
                 f"<strong style='font-size:12pt;color:#1E3A5F;'>"
                 f"{emoji}&nbsp;&nbsp;{title}</strong>"
             )
@@ -145,7 +148,16 @@ class ReportFormatter:
             collapsed.append(line)
 
         # Apply section header styling
-        styled = [_style_line(ln) for ln in collapsed]
+        styled = []
+        first_section_seen = False
+        for line in collapsed:
+            stripped = line.strip()
+            is_section = bool(re.fullmatch(r'<strong>([^<]+)</strong>', stripped))
+            styled.append(_style_line(line, is_first_section=is_section and not first_section_seen))
+            if is_section:
+                title = re.fullmatch(r'<strong>([^<]+)</strong>', stripped).group(1)
+                if title in SECTION_EMOJI:
+                    first_section_seen = True
 
         # Skipped tests fine print
         skip_cats = specs.get('_job_skip_cats', set())
@@ -162,27 +174,22 @@ class ReportFormatter:
 
         return '<br>'.join(styled)
 
-    def _get_report_meta_lines(self, specs):
+    def _get_report_meta_lines(self, specs, upload_title):
         """Shared header lines for both overview and full uploads."""
         lines = []
 
-        report_type = specs.get('_job_report_type', '')
-        if report_type:
-            lines.append(f"<strong style='font-size:14pt;'>{report_type}</strong>")
+        if upload_title:
+            lines.append(f"<strong style='font-size:12pt;'>{upload_title}</strong>")
 
         tech_name = specs.get('_job_tech_name', '')
         if tech_name:
-            lines.append(f"<strong>Diagnosed by:</strong> {tech_name}")
-
-        if report_type or tech_name:
-            lines.append("<hr style='border:none;border-top:1px solid #ccc;margin:8px 0;'>")
+            lines.append(f"<strong>Uploaded by:</strong> {tech_name}")
 
         return lines
 
     def _format_overview_only_note(self, specs):
         """Short upload for routine tickets."""
-        lines = self._get_report_meta_lines(specs)
-        lines.append("<strong>System Overview</strong>")
+        lines = self._get_report_meta_lines(specs, "System Overview")
 
         lines.append(
             f"<strong>Current OS Version:</strong> {self._format_current_os_version(specs)}"
@@ -307,7 +314,7 @@ class ReportFormatter:
 
     def _format_header(self, specs):
         """Format header section — report type first (large bold), then tech name, then system overview"""
-        lines = self._get_report_meta_lines(specs)
+        lines = self._get_report_meta_lines(specs, "Full Diagnostic Results")
         skip_cats = specs.get('_job_skip_cats', set())
 
         import platform

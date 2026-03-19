@@ -102,8 +102,9 @@ def _make_msgbox(parent, title, text, buttons=None, default=None):
     box = QMessageBox()          # <-- no parent = no style inheritance
     box.setWindowTitle(title)
     box.setText(text)
+    box.setTextFormat(Qt.TextFormat.PlainText)
     box.setWindowModality(Qt.WindowModality.ApplicationModal)
-    box.setMinimumWidth(460)
+    box.setMinimumWidth(560)
 
     # Light palette so text is readable
     pal = QPalette()
@@ -121,14 +122,20 @@ def _make_msgbox(parent, title, text, buttons=None, default=None):
     if default is not None:
         box.setDefaultButton(default)
 
+    # Force the final wrapped size before centering so text does not clip on
+    # Windows DPI scaling, especially for multi-line confirmation prompts.
+    box.layout().activate()
+    box.adjustSize()
+    hint = box.sizeHint()
+    box.resize(max(560, hint.width()), max(180, hint.height()))
+
     # Centre over the real parent window using the final size hint so text
     # and buttons are not clipped on scaled Windows displays.
     if parent is not None:
-        hint = box.sizeHint()
         geo = parent.geometry()
         box.move(
-            geo.x() + max(0, (geo.width() - hint.width()) // 2),
-            geo.y() + max(0, (geo.height() - hint.height()) // 2),
+            geo.x() + max(0, (geo.width() - box.width()) // 2),
+            geo.y() + max(0, (geo.height() - box.height()) // 2),
         )
     return box
 
@@ -423,7 +430,25 @@ class StartupDialog(QDialog):
 
         # ── Test Categories ───────────────────────────────────────
         body_layout.addWidget(_section_lbl(
-            "Tests to Run  (uncheck to skip — skipped tests noted in report)"))
+            "Tests to Run  (basic system info is always collected)"))
+
+        bulk_row = QHBoxLayout()
+        bulk_row.setSpacing(8)
+
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.setObjectName("secondary")
+        select_all_btn.setCursor(Qt.PointingHandCursor)
+        select_all_btn.clicked.connect(lambda: self._set_all_categories(True))
+        bulk_row.addWidget(select_all_btn)
+
+        deselect_all_btn = QPushButton("Deselect All")
+        deselect_all_btn.setObjectName("secondary")
+        deselect_all_btn.setCursor(Qt.PointingHandCursor)
+        deselect_all_btn.clicked.connect(lambda: self._set_all_categories(False))
+        bulk_row.addWidget(deselect_all_btn)
+
+        bulk_row.addStretch()
+        body_layout.addLayout(bulk_row)
 
         self._category_checks = {}
         checkbox_style = f"""
@@ -630,6 +655,11 @@ class StartupDialog(QDialog):
             s = load_settings()
             s['last_tech_name'] = self.tech_name
             save_settings(s)
+
+    def _set_all_categories(self, checked):
+        """Select or deselect all diagnostic category checkboxes."""
+        for checkbox in self._category_checks.values():
+            checkbox.setChecked(checked)
 
     # ── Button handlers ───────────────────────────────────────────
 

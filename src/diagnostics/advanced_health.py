@@ -2073,14 +2073,23 @@ def collect_advanced_health_summary(
         filtered_checks.append((key, label, func, timeout))
     checks = filtered_checks
 
-    # Skip idle temperature sampling if CPU, GPU, and RAM categories are all skipped.
-    if {'cpu', 'gpu', 'ram'}.issubset(skip):
+    # Skip idle CPU/GPU temp sampling only when both related categories are skipped.
+    if {'cpu', 'gpu'}.issubset(skip):
         checks = [(k, l, f, t) for k, l, f, t in checks if k != 'temperatures']
         results['temperatures'] = {'status': 'skipped'}
 
     for key, label, func, timeout in checks:
         _log(f"  Checking {label}...")
         results[key] = _run_with_timeout(func, timeout, label)
+
+    temps_result = results.get('temperatures')
+    if isinstance(temps_result, dict) and temps_result.get('status') == 'ok':
+        if 'cpu' in skip:
+            temps_result['cpu_temp_c'] = None
+            temps_result['cpu_sensor'] = None
+            temps_result['cpu_sensor_source'] = None
+        if 'gpu' in skip:
+            temps_result['gpu'] = None
 
     # Disk speed test — skip if storage category skipped
     if 'storage' in skip:
