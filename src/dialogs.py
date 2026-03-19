@@ -1600,7 +1600,7 @@ class SettingsDialog(QDialog):
         btns_row.setSpacing(8)
 
         self._check_updates_btn = QPushButton("Check for Updates")
-        self._check_updates_btn.setObjectName("secondary")
+        self._check_updates_btn.setObjectName("primary")
         self._check_updates_btn.setCursor(Qt.PointingHandCursor)
         self._check_updates_btn.clicked.connect(self._on_check_updates)
         btns_row.addWidget(self._check_updates_btn)
@@ -1735,21 +1735,46 @@ class SettingsDialog(QDialog):
         self._update_status.setStyleSheet(
             f"color: {color}; border: none;")
 
+    def _set_update_button_style(self, button, enabled, primary=False):
+        if enabled:
+            if primary:
+                button.setStyleSheet(
+                    f"background-color: {COLORS['primary']}; color: white; "
+                    "border: none; border-radius: 8px; font-weight: bold;")
+            else:
+                button.setStyleSheet(
+                    f"background-color: {COLORS['card_bg']}; "
+                    f"color: {COLORS['text_primary']}; "
+                    f"border: 1px solid {COLORS['card_border']}; "
+                    "border-radius: 8px; font-weight: bold;")
+        else:
+            button.setStyleSheet(
+                "background-color: #444444; color: #888888; "
+                "border: none; border-radius: 8px; font-weight: bold;")
+
     def _refresh_update_buttons(self):
         supported = self._update_info.get('supported', False)
         available = self._update_info.get('available', False)
         downloaded = self._update_info.get('downloaded', False)
         has_download_url = bool(self._update_info.get('download_url'))
 
-        self._check_updates_btn.setEnabled(
+        check_enabled = (
             self._check_worker is None and self._download_worker is None
         )
-        self._download_update_btn.setEnabled(
+        download_enabled = (
             supported and available and has_download_url and not downloaded and self._download_worker is None
         )
-        self._install_update_btn.setEnabled(
+        install_enabled = (
             supported and downloaded and bool(self._update_info.get('installer_path'))
         )
+
+        self._check_updates_btn.setEnabled(check_enabled)
+        self._download_update_btn.setEnabled(download_enabled)
+        self._install_update_btn.setEnabled(install_enabled)
+
+        self._set_update_button_style(self._check_updates_btn, check_enabled, primary=True)
+        self._set_update_button_style(self._download_update_btn, download_enabled)
+        self._set_update_button_style(self._install_update_btn, install_enabled, primary=True)
 
     def _load_pending_update_state(self):
         pending = get_pending_update()

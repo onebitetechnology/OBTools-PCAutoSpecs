@@ -971,7 +971,6 @@ def main():
         window = MainWindow(log_file)
     except Exception as e:
         logging.critical(f"MainWindow failed to initialize: {e}", exc_info=True)
-        from PySide6.QtWidgets import QMessageBox
         QMessageBox.critical(None, "Startup Error",
             f"AutoSpec failed to start:\n\n{e}\n\nCheck the log file for details.")
         sys.exit(1)
