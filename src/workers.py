@@ -19,9 +19,10 @@ class SpecCollectorWorker(QThread):
     stress_test_temp = Signal(float)       # live temp sample during stress test
     stress_test_finished = Signal()        # emitted when stress test ends
 
-    def __init__(self, skip_categories=None, parent=None):
+    def __init__(self, skip_categories=None, quick_mode=False, parent=None):
         super().__init__(parent)
         self.skip_categories = skip_categories or set()
+        self.quick_mode = quick_mode
 
     def run(self):
         specs = None
@@ -37,28 +38,34 @@ class SpecCollectorWorker(QThread):
                     skip_categories=self.skip_categories,
                 )
 
-                # Run advanced health checks (temperatures, disk speed, etc.)
-                try:
-                    self.progress.emit("Running advanced health checks...")
-                    self.log_message.emit("Running advanced health checks...\n")
-                    from diagnostics import collect_advanced_health_summary
-                    adv_health = collect_advanced_health_summary(
-                        log_callback=lambda msg: self.log_message.emit(f"{msg}\n"),
-                        stress_started_callback=lambda: self.stress_test_started.emit(),
-                        stress_temp_callback=lambda t: self.stress_test_temp.emit(t),
-                        stress_finished_callback=lambda: self.stress_test_finished.emit(),
-                        skip_categories=self.skip_categories,
+                if self.quick_mode:
+                    specs['AdvancedHealth'] = {}
+                    self.log_message.emit(
+                        "  Quick upload mode — advanced health checks skipped\n"
                     )
-                    specs['AdvancedHealth'] = adv_health
+                else:
+                    # Run advanced health checks (temperatures, disk speed, etc.)
+                    try:
+                        self.progress.emit("Running advanced health checks...")
+                        self.log_message.emit("Running advanced health checks...\n")
+                        from diagnostics import collect_advanced_health_summary
+                        adv_health = collect_advanced_health_summary(
+                            log_callback=lambda msg: self.log_message.emit(f"{msg}\n"),
+                            stress_started_callback=lambda: self.stress_test_started.emit(),
+                            stress_temp_callback=lambda t: self.stress_test_temp.emit(t),
+                            stress_finished_callback=lambda: self.stress_test_finished.emit(),
+                            skip_categories=self.skip_categories,
+                        )
+                        specs['AdvancedHealth'] = adv_health
 
-                    # Bridge device manager errors from AdvancedHealth
-                    dm_errors = adv_health.pop('_device_manager_errors', None)
-                    if dm_errors:
-                        specs['DeviceManagerErrors'] = dm_errors
+                        # Bridge device manager errors from AdvancedHealth
+                        dm_errors = adv_health.pop('_device_manager_errors', None)
+                        if dm_errors:
+                            specs['DeviceManagerErrors'] = dm_errors
 
-                    self.log_message.emit("  Advanced health checks complete\n")
-                except Exception as e:
-                    logging.warning(f"Advanced health checks failed: {e}")
+                        self.log_message.emit("  Advanced health checks complete\n")
+                    except Exception as e:
+                        logging.warning(f"Advanced health checks failed: {e}")
 
                 self.finished.emit(specs)
             finally:

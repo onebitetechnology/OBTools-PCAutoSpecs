@@ -612,11 +612,20 @@ class MainWindow(QMainWindow):
             self._gpu_worker.stop()
             self._gpu_worker = None
         self._info_panel.set_button_enabled(False)
-        self._info_panel.set_button_text("⏳ Scanning...")
+        if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW:
+            self._info_panel.set_button_text("⏳ Collecting System Details...")
+            self._status_bar.showMessage("Collecting system details for quick upload...")
+            self._log_panel.append(
+                "  Quick upload mode — collecting basic system details...\n",
+                'info')
+        else:
+            self._info_panel.set_button_text("⏳ Scanning...")
         self._info_panel.spinner.start()
 
         self._spec_worker = SpecCollectorWorker(
-            skip_categories=self._job_skip_cats)
+            skip_categories=self._job_skip_cats,
+            quick_mode=(self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW),
+        )
         self._spec_worker.progress.connect(
             self._info_panel.spinner.set_phase)
         self._spec_worker.log_message.connect(self._on_log_message)
@@ -676,7 +685,7 @@ class MainWindow(QMainWindow):
             gpu_name = m.group(1).strip() if m else gpu_full
             self._start_gpu_monitor(gpu_name)
 
-        if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW and self._job_ticket_info:
+        if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW and self._job_ticket_id:
             QTimer.singleShot(350, self._quick_upload_system_overview)
         else:
             # Auto-open the results/upload dialog after a short delay
@@ -693,6 +702,12 @@ class MainWindow(QMainWindow):
         self._log_panel.append(
             f"  \u2717 Error collecting specs: {error_msg}\n\n", 'error')
         self._status_bar.showMessage("Error collecting specs — use Job Setup to retry")
+        if self._job_quick_upload:
+            QMessageBox.critical(
+                self,
+                "Quick Upload Failed",
+                f"System details could not be collected for quick upload.\n\n{error_msg}",
+            )
         self._maybe_prompt_for_update()
 
     # ── GPU monitoring ────────────────────────────────────────────
@@ -739,6 +754,15 @@ class MainWindow(QMainWindow):
         self._upload_worker.start()
 
     def _quick_upload_system_overview(self):
+        if not self._job_ticket_id:
+            logging.warning("Quick upload requested without a confirmed ticket ID")
+            QMessageBox.warning(
+                self,
+                "Ticket Required",
+                "A confirmed ticket is required before quick-uploading system details.",
+            )
+            return
+
         specs_with_context = self._build_specs_with_context()
         formatter = ReportFormatter()
         note_html = formatter.format_diagnostic_note(
@@ -751,7 +775,7 @@ class MainWindow(QMainWindow):
         self._begin_upload(
             self._job_ticket_id,
             note_html,
-            already_confirmed=True,
+            already_confirmed=bool(self._job_ticket_info),
         )
 
     def _on_preview(self):
