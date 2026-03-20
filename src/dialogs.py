@@ -528,19 +528,16 @@ class StartupDialog(QDialog):
         body_layout.addStretch()
 
         # ── Bottom action bar ─────────────────────────────────────
-        footer = QWidget()
-        footer.setStyleSheet(f"background-color: {COLORS['bg_root']};")
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(24, 12, 24, 16)
         btn_row.setSpacing(10)
-        footer.setLayout(btn_row)
 
-        skip_btn = QPushButton("Skip, Don't Scan")
-        skip_btn.setObjectName("secondary")
-        skip_btn.setFixedHeight(40)
-        skip_btn.setCursor(Qt.PointingHandCursor)
-        skip_btn.clicked.connect(self._on_skip)
-        btn_row.addWidget(skip_btn)
+        self._skip_btn = QPushButton("Skip, Don't Scan")
+        self._skip_btn.setObjectName("secondary")
+        self._skip_btn.setFixedHeight(40)
+        self._skip_btn.setCursor(Qt.PointingHandCursor)
+        self._skip_btn.clicked.connect(self._on_skip)
+        btn_row.addWidget(self._skip_btn)
 
         btn_row.addStretch()
 
@@ -554,7 +551,7 @@ class StartupDialog(QDialog):
         self._start_btn.clicked.connect(self._on_start)
         btn_row.addWidget(self._start_btn)
 
-        outer.addWidget(footer)
+        outer.addLayout(btn_row)
         self._refresh_start_button()
 
     # ── Ticket handling ───────────────────────────────────────────
