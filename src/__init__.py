@@ -1,4 +1,4 @@
 """
 PC AutoSpec - Source Package
 """
-__version__ = "2.2.26"
+__version__ = "2.2.27"

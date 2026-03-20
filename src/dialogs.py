@@ -524,7 +524,7 @@ class StartupDialog(QDialog):
 
         self._start_btn = QPushButton("Start Scan  ▶")
         self._start_btn.setFixedHeight(40)
-        self._start_btn.setMinimumWidth(160)
+        self._start_btn.setMinimumWidth(300)
         self._start_btn.setCursor(Qt.PointingHandCursor)
         self._start_btn.setStyleSheet(
             f"background-color: {COLORS['primary']}; color: white; "
@@ -699,14 +699,27 @@ class StartupDialog(QDialog):
     def _on_start(self):
         """Validate report type then accept."""
         self.skip_scan_requested = False
-        if not self._radio_initial.isChecked() and not self._radio_final.isChecked():
+
+        if self.upload_scope == UPLOAD_SCOPE_OVERVIEW:
+            # Quick-upload path should be lightweight: assume an initial report
+            # unless the tech explicitly chose the final-report option.
+            if not self._radio_initial.isChecked() and not self._radio_final.isChecked():
+                self._radio_initial.click()
+
+            # If a ticket number was entered but not manually confirmed yet,
+            # treat the quick-upload action as the confirmation trigger.
+            if not self.ticket_info and self._ticket_input.text().strip():
+                self._on_confirm_ticket()
+
+            if not self.ticket_info:
+                self._ticket_status.setText("⚠ Enter and confirm a ticket to quick-upload system details")
+                self._ticket_status.setStyleSheet(
+                    f"color: {COLORS['warning']}; font-size: 9pt;")
+                return
+        elif not self._radio_initial.isChecked() and not self._radio_final.isChecked():
             self._report_type_warning.setVisible(True)
             return
-        if self.upload_scope == UPLOAD_SCOPE_OVERVIEW and not self.ticket_info:
-            self._ticket_status.setText("⚠ Confirm the ticket before quick-uploading system details")
-            self._ticket_status.setStyleSheet(
-                f"color: {COLORS['warning']}; font-size: 9pt;")
-            return
+
         self._report_type_warning.setVisible(False)
         self._collect_results()
         self.accept()
