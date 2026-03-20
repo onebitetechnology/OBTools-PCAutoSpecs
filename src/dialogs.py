@@ -188,6 +188,7 @@ class StartupDialog(QDialog):
         self.tech_notes      = ""
         self.skip_categories = set()
         self.skip_scan_requested = False
+        self.quick_upload_requested = False
 
         self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
 
@@ -405,6 +406,7 @@ class StartupDialog(QDialog):
             self._upload_full_btn.setStyleSheet(
                 _btn_selected if not overview_selected else _btn_base)
             self.upload_scope = scope
+            self._refresh_start_button()
 
         self._upload_overview_btn.clicked.connect(
             lambda: _select_upload_scope(UPLOAD_SCOPE_OVERVIEW))
@@ -531,6 +533,7 @@ class StartupDialog(QDialog):
         btn_row.addWidget(self._start_btn)
 
         body_layout.addLayout(btn_row)
+        self._refresh_start_button()
 
         self.adjustSize()
 
@@ -605,6 +608,7 @@ class StartupDialog(QDialog):
                 self._confirm_btn.setEnabled(True)
                 self.ticket_info = {}
                 self.ticket_id   = ""
+            self._refresh_start_button()
 
         except Exception as e:
             self._ticket_status.setText(f"⚠ Could not look up ticket: {e}")
@@ -612,6 +616,7 @@ class StartupDialog(QDialog):
                 f"color: {COLORS['warning']}; font-size: 9pt;")
             self._confirm_btn.setText("Confirm Ticket")
             self._confirm_btn.setEnabled(True)
+            self._refresh_start_button()
 
     # ── Manage Techs ─────────────────────────────────────────────
 
@@ -657,10 +662,14 @@ class StartupDialog(QDialog):
             UPLOAD_SCOPE_OVERVIEW if self._upload_overview_btn.isChecked()
             else UPLOAD_SCOPE_FULL
         )
-        self.skip_categories = {
-            key for key, cb in self._category_checks.items()
-            if not cb.isChecked()
-        }
+        self.quick_upload_requested = self.upload_scope == UPLOAD_SCOPE_OVERVIEW
+        if self.quick_upload_requested:
+            self.skip_categories = set(SCAN_CATEGORIES.keys())
+        else:
+            self.skip_categories = {
+                key for key, cb in self._category_checks.items()
+                if not cb.isChecked()
+            }
         # Save tech name for next session
         if self.tech_name:
             s = load_settings()
@@ -672,6 +681,19 @@ class StartupDialog(QDialog):
         for checkbox in self._category_checks.values():
             checkbox.setChecked(checked)
 
+    def _refresh_start_button(self):
+        """Update primary action wording based on upload mode and ticket confirmation."""
+        if not hasattr(self, '_start_btn'):
+            return
+
+        if self.upload_scope == UPLOAD_SCOPE_OVERVIEW:
+            if self.ticket_info:
+                self._start_btn.setText("Quick Upload System Details  ▶")
+            else:
+                self._start_btn.setText("Confirm Ticket to Quick Upload  ▶")
+        else:
+            self._start_btn.setText("Start Full Scan  ▶")
+
     # ── Button handlers ───────────────────────────────────────────
 
     def _on_start(self):
@@ -679,6 +701,11 @@ class StartupDialog(QDialog):
         self.skip_scan_requested = False
         if not self._radio_initial.isChecked() and not self._radio_final.isChecked():
             self._report_type_warning.setVisible(True)
+            return
+        if self.upload_scope == UPLOAD_SCOPE_OVERVIEW and not self.ticket_info:
+            self._ticket_status.setText("⚠ Confirm the ticket before quick-uploading system details")
+            self._ticket_status.setStyleSheet(
+                f"color: {COLORS['warning']}; font-size: 9pt;")
             return
         self._report_type_warning.setVisible(False)
         self._collect_results()

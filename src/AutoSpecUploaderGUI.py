@@ -41,7 +41,7 @@ from theme import COLORS, build_stylesheet
 from settings import (
     APP_NAME, APP_VERSION, load_settings, is_configured, is_first_run_setup_complete,
     get_app_dir, get_assets_dir, get_window_title, get_lhm_path,
-    get_active_api_key, DEFAULT_UPLOAD_SCOPE,
+    get_active_api_key, DEFAULT_UPLOAD_SCOPE, UPLOAD_SCOPE_OVERVIEW,
 )
 from repairdesk_api import RepairDeskAPI
 from report_formatter import ReportFormatter
@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
         self._job_upload_scope  = DEFAULT_UPLOAD_SCOPE
         self._job_tech_notes    = ''
         self._job_skip_cats     = set()   # category keys to skip
+        self._job_quick_upload  = False
 
         self.setWindowTitle(get_window_title())
         self.resize(1500, 900)
@@ -551,6 +552,7 @@ class MainWindow(QMainWindow):
         self._job_upload_scope = dlg.upload_scope
         self._job_tech_notes  = dlg.tech_notes
         self._job_skip_cats   = dlg.skip_categories
+        self._job_quick_upload = dlg.quick_upload_requested
 
         # Update header subtitle to show tech + ticket if available
         self._update_header_context()
@@ -661,9 +663,12 @@ class MainWindow(QMainWindow):
             gpu_name = m.group(1).strip() if m else gpu_full
             self._start_gpu_monitor(gpu_name)
 
-        # Auto-open the results/upload dialog after a short delay
-        # (delay lets the UI repaint and GPU monitor start first)
-        QTimer.singleShot(600, self._on_preview)
+        if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW and self._job_ticket_info:
+            QTimer.singleShot(350, self._quick_upload_system_overview)
+        else:
+            # Auto-open the results/upload dialog after a short delay
+            # (delay lets the UI repaint and GPU monitor start first)
+            QTimer.singleShot(600, self._on_preview)
 
     def _on_specs_error(self, error_msg):
         self._scan_in_progress = False
@@ -686,6 +691,54 @@ class MainWindow(QMainWindow):
 
     # ── Preview / Upload ──────────────────────────────────────────
 
+    def _build_specs_with_context(self):
+        specs_with_context = dict(self._system_specs)
+        specs_with_context['_job_tech_name'] = self._job_tech_name
+        specs_with_context['_job_ticket_id'] = self._job_ticket_id
+        specs_with_context['_job_report_type'] = self._job_report_type
+        specs_with_context['_job_tech_notes'] = self._job_tech_notes
+        specs_with_context['_job_skip_cats'] = self._job_skip_cats
+        return specs_with_context
+
+    def _begin_upload(self, ticket_id, note_html, already_confirmed=False):
+        # Refresh API — use tech's own API key if configured
+        _upload_key, _upload_source = get_active_api_key(self._job_tech_name)
+        self._api = RepairDeskAPI(api_key=_upload_key)
+        if _upload_source != 'global':
+            logging.info(f"Upload using API key for tech: {_upload_source}")
+        else:
+            logging.info("Upload using global API key")
+
+        self._current_ticket_id = ticket_id
+        self._info_panel.set_button_enabled(False)
+        self._status_bar.showMessage("Uploading...")
+        self._log_panel.append("\n")
+        self._log_panel.append("  Uploading to RepairDesk...\n")
+
+        self._upload_worker = UploadWorker(
+            self._api, ticket_id, note_html,
+            skip_confirmation=already_confirmed)
+        self._upload_worker.progress.connect(self._on_upload_progress)
+        self._upload_worker.finished.connect(self._on_upload_finished)
+        self._upload_worker.confirm_customer.connect(self._on_confirm_customer)
+        self._upload_worker.start()
+
+    def _quick_upload_system_overview(self):
+        specs_with_context = self._build_specs_with_context()
+        formatter = ReportFormatter()
+        note_html = formatter.format_diagnostic_note(
+            specs_with_context,
+            upload_mode=UPLOAD_SCOPE_OVERVIEW,
+        )
+        self._log_panel.append(
+            "  Quick upload mode — sending system details to the confirmed ticket...\n",
+            'info')
+        self._begin_upload(
+            self._job_ticket_id,
+            note_html,
+            already_confirmed=True,
+        )
+
     def _on_preview(self):
         """Handle Upload to RepairDesk button click — show preview, get ticket, upload."""
         if not self._system_specs:
@@ -696,12 +749,7 @@ class MainWindow(QMainWindow):
             return
 
         # Generate HTML report — inject job context into specs
-        specs_with_context = dict(self._system_specs)
-        specs_with_context['_job_tech_name']   = self._job_tech_name
-        specs_with_context['_job_ticket_id']   = self._job_ticket_id
-        specs_with_context['_job_report_type'] = self._job_report_type
-        specs_with_context['_job_tech_notes']  = self._job_tech_notes
-        specs_with_context['_job_skip_cats']   = self._job_skip_cats
+        specs_with_context = self._build_specs_with_context()
 
         formatter = ReportFormatter()
         issues = formatter._get_critical_issues_list(specs_with_context)
@@ -728,30 +776,15 @@ class MainWindow(QMainWindow):
         self._job_upload_scope = dlg.upload_scope
         self._update_header_context()
 
-        # Refresh API — use tech's own API key if configured
-        _upload_key, _upload_source = get_active_api_key(self._job_tech_name)
-        self._api = RepairDeskAPI(api_key=_upload_key)
-        if _upload_source != 'global':
-            logging.info(f"Upload using API key for tech: {_upload_source}")
-        else:
-            logging.info("Upload using global API key")
-        self._current_ticket_id = ticket_id  # store for success messages
         logging.info(f"User confirmed upload for ticket: {ticket_id}")
-
-        self._info_panel.set_button_enabled(False)
-        self._status_bar.showMessage("Uploading...")
-        self._log_panel.append("\n")
-        self._log_panel.append("  Uploading to RepairDesk...\n")
 
         # If ticket was confirmed at startup, skip the re-confirmation dialog
         already_confirmed = bool(self._job_ticket_info) and ticket_id == self._job_ticket_id
-        self._upload_worker = UploadWorker(
-            self._api, ticket_id, edited_note,
-            skip_confirmation=already_confirmed)
-        self._upload_worker.progress.connect(self._on_upload_progress)
-        self._upload_worker.finished.connect(self._on_upload_finished)
-        self._upload_worker.confirm_customer.connect(self._on_confirm_customer)
-        self._upload_worker.start()
+        self._begin_upload(
+            ticket_id,
+            edited_note,
+            already_confirmed=already_confirmed,
+        )
 
     def _on_confirm_customer(self, ticket_info):
         """Show confirmation dialog with customer name before upload proceeds."""
