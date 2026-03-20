@@ -46,8 +46,15 @@ from settings import (
 from repairdesk_api import RepairDeskAPI
 from report_formatter import ReportFormatter
 from panels import SystemInfoPanel, ActivityLogPanel
-from dialogs import SettingsDialog, ReportPreviewDialog, WelcomeDialog, StressTestDialog, ScanSummaryDialog, StartupDialog
-from workers import SpecCollectorWorker, UploadWorker, GpuMonitorWorker
+from dialogs import (
+    SettingsDialog, ReportPreviewDialog, WelcomeDialog, StressTestDialog,
+    ScanSummaryDialog, StartupDialog, _make_msgbox,
+)
+from updater import launch_pending_update
+from workers import (
+    SpecCollectorWorker, UploadWorker, GpuMonitorWorker,
+    UpdateCheckWorker, UpdateDownloadWorker,
+)
 
 
 _APP_INSTANCE_LOCK = None
@@ -139,6 +146,10 @@ class MainWindow(QMainWindow):
         self._lhm_process = None  # LibreHardwareMonitor subprocess
         self._lhm_launched = False
         self._scan_in_progress = False
+        self._startup_update_check_worker = None
+        self._startup_update_download_worker = None
+        self._startup_update_info = None
+        self._startup_update_prompt_shown = False
 
         # Job context — set by StartupDialog, carried into scan + report
         self._job_tech_name     = self._settings.get('last_tech_name', '')
@@ -556,6 +567,7 @@ class MainWindow(QMainWindow):
 
         # Update header subtitle to show tech + ticket if available
         self._update_header_context()
+        self._start_startup_update_check()
 
         if result != StartupDialog.Accepted:
             if dlg.skip_scan_requested:
@@ -570,6 +582,7 @@ class MainWindow(QMainWindow):
                     'warning')
             else:
                 logging.info("Job setup dismissed — not starting a scan")
+            self._maybe_prompt_for_update()
             return
 
         self._start_spec_collection()
@@ -669,6 +682,7 @@ class MainWindow(QMainWindow):
             # Auto-open the results/upload dialog after a short delay
             # (delay lets the UI repaint and GPU monitor start first)
             QTimer.singleShot(600, self._on_preview)
+        self._maybe_prompt_for_update()
 
     def _on_specs_error(self, error_msg):
         self._scan_in_progress = False
@@ -679,6 +693,7 @@ class MainWindow(QMainWindow):
         self._log_panel.append(
             f"  \u2717 Error collecting specs: {error_msg}\n\n", 'error')
         self._status_bar.showMessage("Error collecting specs — use Job Setup to retry")
+        self._maybe_prompt_for_update()
 
     # ── GPU monitoring ────────────────────────────────────────────
 
@@ -853,8 +868,152 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self, "Upload Failed",
                 f"Failed to upload diagnostic note:\n\n{message}")
+        self._maybe_prompt_for_update()
 
     # ── Settings ──────────────────────────────────────────────────
+
+    def _start_startup_update_check(self):
+        """Silently check GitHub Releases and prompt later if an update exists."""
+        if self._startup_update_check_worker is not None:
+            return
+
+        self._startup_update_check_worker = UpdateCheckWorker(self)
+        self._startup_update_check_worker.finished.connect(
+            self._on_startup_update_check_finished)
+        self._startup_update_check_worker.error.connect(
+            self._on_startup_update_check_error)
+        self._startup_update_check_worker.start()
+
+    def _on_startup_update_check_finished(self, info):
+        self._startup_update_check_worker = None
+        self._startup_update_info = dict(info or {})
+        if self._startup_update_info.get('available') or self._startup_update_info.get('downloaded'):
+            latest = self._startup_update_info.get('latest_version') or 'Unknown'
+            logging.info(f"Startup update check found version {latest}")
+            self._maybe_prompt_for_update()
+
+    def _on_startup_update_check_error(self, message):
+        self._startup_update_check_worker = None
+        logging.debug(f"Startup update check failed: {message}")
+
+    def _maybe_prompt_for_update(self):
+        """Prompt only when an update exists and the app is idle enough to interrupt."""
+        if self._startup_update_prompt_shown:
+            return
+        if not self._startup_update_info:
+            return
+        if not (self._startup_update_info.get('available') or self._startup_update_info.get('downloaded')):
+            return
+        if self._scan_in_progress:
+            QTimer.singleShot(1500, self._maybe_prompt_for_update)
+            return
+
+        self._startup_update_prompt_shown = True
+
+        if self._startup_update_info.get('downloaded') and self._startup_update_info.get('installer_path'):
+            self._prompt_install_ready_update()
+            return
+
+        latest = self._startup_update_info.get('latest_version') or 'Unknown'
+        box = _make_msgbox(
+            self,
+            "Update Available",
+            f"PC AutoSpec {latest} is available.\n\n"
+            f"Current version: {APP_VERSION}\n"
+            f"Latest version: {latest}\n\n"
+            "Download the update now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        yes_btn = box.button(QMessageBox.StandardButton.Yes)
+        no_btn = box.button(QMessageBox.StandardButton.No)
+        if yes_btn:
+            yes_btn.setText("Download Now")
+        if no_btn:
+            no_btn.setText("Later")
+
+        if box.exec() == int(QMessageBox.StandardButton.Yes):
+            self._download_startup_update()
+
+    def _download_startup_update(self):
+        if not self._startup_update_info or self._startup_update_download_worker is not None:
+            return
+
+        self._status_bar.showMessage("Downloading app update...")
+        self._log_panel.append("  App update available — downloading installer...\n", 'info')
+        self._startup_update_download_worker = UpdateDownloadWorker(
+            dict(self._startup_update_info), self)
+        self._startup_update_download_worker.progress.connect(
+            self._on_startup_update_download_progress)
+        self._startup_update_download_worker.finished.connect(
+            self._on_startup_update_download_finished)
+        self._startup_update_download_worker.error.connect(
+            self._on_startup_update_download_error)
+        self._startup_update_download_worker.start()
+
+    def _on_startup_update_download_progress(self, percent, message):
+        self._status_bar.showMessage(message)
+
+    def _on_startup_update_download_finished(self, result):
+        self._startup_update_download_worker = None
+        self._startup_update_info = dict(self._startup_update_info or {})
+        self._startup_update_info.update({
+            'available': True,
+            'downloaded': True,
+            'installer_path': result.get('installer_path'),
+            'latest_version': result.get('version') or self._startup_update_info.get('latest_version'),
+            'message': result.get('message', 'Update downloaded and ready to install.'),
+        })
+        self._status_bar.showMessage(self._startup_update_info['message'])
+        self._log_panel.append(
+            f"  {self._startup_update_info['message']}\n",
+            'success')
+        self._prompt_install_ready_update()
+
+    def _on_startup_update_download_error(self, message):
+        self._startup_update_download_worker = None
+        self._status_bar.showMessage("Update download failed")
+        self._log_panel.append(f"  Update download failed: {message}\n", 'error')
+
+    def _prompt_install_ready_update(self):
+        installer_path = self._startup_update_info.get('installer_path') if self._startup_update_info else None
+        if not installer_path:
+            return
+
+        latest = self._startup_update_info.get('latest_version') or 'Unknown'
+        box = _make_msgbox(
+            self,
+            "Install Update",
+            f"PC AutoSpec {latest} is ready to install.\n\n"
+            "The installer will open after PC AutoSpec closes.\n"
+            "Install it now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        yes_btn = box.button(QMessageBox.StandardButton.Yes)
+        no_btn = box.button(QMessageBox.StandardButton.No)
+        if yes_btn:
+            yes_btn.setText("Install Now")
+        if no_btn:
+            no_btn.setText("Later")
+
+        if box.exec() != int(QMessageBox.StandardButton.Yes):
+            return
+
+        try:
+            launch_pending_update(installer_path)
+        except Exception as e:
+            logging.error(f"Could not launch downloaded update: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Update Failed",
+                f"Could not launch the installer:\n\n{e}",
+            )
+            return
+
+        app = QApplication.instance()
+        if app:
+            app.quit()
 
     def _open_settings(self):
         dlg = SettingsDialog(self._settings, self)
