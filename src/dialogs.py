@@ -176,7 +176,7 @@ class StartupDialog(QDialog):
     def __init__(self, parent=None, prefill_tech_name=""):
         super().__init__(parent)
         self.setWindowTitle("Job Setup")
-        self.setMinimumWidth(720)
+        self.setMinimumSize(720, 620)
         self.setMaximumWidth(860)
 
         # Result attributes (populated on accept or left as defaults on skip)
@@ -191,6 +191,17 @@ class StartupDialog(QDialog):
         self.quick_upload_requested = False
 
         self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            self.resize(
+                min(820, max(720, available.width() - 120)),
+                min(760, max(620, available.height() - 120)),
+            )
+            self.setMaximumHeight(max(620, available.height() - 60))
+        else:
+            self.resize(820, 760)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -212,12 +223,18 @@ class StartupDialog(QDialog):
         h_layout.addWidget(hint)
         outer.addWidget(header)
 
-        # ── Body ──────────────────────────────────────────────────
+        # ── Scrollable body ───────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(scroll, 1)
+
         body = QWidget()
         body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(24, 20, 24, 8)
+        body_layout.setContentsMargins(24, 20, 24, 20)
         body_layout.setSpacing(16)
-        outer.addWidget(body)
+        scroll.setWidget(body)
 
         # Helper: section label style
         def _section_lbl(text):
@@ -508,10 +525,15 @@ class StartupDialog(QDialog):
 
             body_layout.addLayout(grid)
 
-        # ── Buttons ───────────────────────────────────────────────
+        body_layout.addStretch()
+
+        # ── Bottom action bar ─────────────────────────────────────
+        footer = QWidget()
+        footer.setStyleSheet(f"background-color: {COLORS['bg_root']};")
         btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 12, 0, 16)
+        btn_row.setContentsMargins(24, 12, 24, 16)
         btn_row.setSpacing(10)
+        footer.setLayout(btn_row)
 
         skip_btn = QPushButton("Skip, Don't Scan")
         skip_btn.setObjectName("secondary")
@@ -532,10 +554,8 @@ class StartupDialog(QDialog):
         self._start_btn.clicked.connect(self._on_start)
         btn_row.addWidget(self._start_btn)
 
-        body_layout.addLayout(btn_row)
+        outer.addWidget(footer)
         self._refresh_start_button()
-
-        self.adjustSize()
 
     # ── Ticket handling ───────────────────────────────────────────
 
