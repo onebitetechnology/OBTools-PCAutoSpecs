@@ -528,13 +528,22 @@ class StartupDialog(QDialog):
         body_layout.addStretch()
 
         # ── Bottom action bar ─────────────────────────────────────
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(24, 12, 24, 16)
+        footer = QFrame()
+        footer.setObjectName("card")
+        footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        footer.setFixedHeight(72)
+        footer.setStyleSheet(
+            f"background-color: {COLORS['bg_card']}; "
+            f"border-top: 1px solid {COLORS['card_border']};"
+        )
+
+        btn_row = QHBoxLayout(footer)
+        btn_row.setContentsMargins(24, 14, 24, 14)
         btn_row.setSpacing(10)
 
         self._skip_btn = QPushButton("Skip, Don't Scan")
         self._skip_btn.setObjectName("secondary")
-        self._skip_btn.setFixedHeight(40)
+        self._skip_btn.setFixedHeight(42)
         self._skip_btn.setCursor(Qt.PointingHandCursor)
         self._skip_btn.clicked.connect(self._on_skip)
         btn_row.addWidget(self._skip_btn)
@@ -542,16 +551,14 @@ class StartupDialog(QDialog):
         btn_row.addStretch()
 
         self._start_btn = QPushButton("Start Scan  ▶")
-        self._start_btn.setFixedHeight(40)
-        self._start_btn.setMinimumWidth(300)
+        self._start_btn.setObjectName("primary")
+        self._start_btn.setFixedHeight(42)
+        self._start_btn.setMinimumWidth(320)
         self._start_btn.setCursor(Qt.PointingHandCursor)
-        self._start_btn.setStyleSheet(
-            f"background-color: {COLORS['primary']}; color: white; "
-            "border: none; border-radius: 8px; font-weight: bold; font-size: 12px;")
         self._start_btn.clicked.connect(self._on_start)
         btn_row.addWidget(self._start_btn)
 
-        outer.addLayout(btn_row)
+        outer.addWidget(footer, 0)
         self._refresh_start_button()
 
     # ── Ticket handling ───────────────────────────────────────────

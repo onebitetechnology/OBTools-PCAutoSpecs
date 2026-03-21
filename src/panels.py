@@ -174,7 +174,7 @@ class SystemInfoPanel(QWidget):
         action_row.setSpacing(10)
 
         self._job_btn = QPushButton("Job Setup")
-        self._job_btn.setObjectName("secondary")
+        self._job_btn.setObjectName("primary")
         self._job_btn.setCursor(Qt.PointingHandCursor)
         self._job_btn.setFixedHeight(48)
         self._job_btn.clicked.connect(self.job_setup_requested.emit)
