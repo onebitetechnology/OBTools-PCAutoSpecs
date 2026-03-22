@@ -13,7 +13,7 @@ from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QTextEdit, QCheckBox, QWidget, QApplication,
-    QScrollArea, QFrame, QProgressBar,
+    QScrollArea, QFrame, QProgressBar, QSizePolicy,
     QMessageBox,
     QComboBox,
     QListWidget,
@@ -190,7 +190,10 @@ class StartupDialog(QDialog):
         self.skip_scan_requested = False
         self.quick_upload_requested = False
 
-        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+        self.setObjectName("jobSetupDialog")
+        self.setStyleSheet(
+            f"QDialog#jobSetupDialog {{ background-color: {COLORS['bg_root']}; }}"
+        )
 
         screen = QApplication.primaryScreen()
         if screen:
@@ -228,6 +231,7 @@ class StartupDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         outer.addWidget(scroll, 1)
 
         body = QWidget()
@@ -529,12 +533,14 @@ class StartupDialog(QDialog):
 
         # ── Bottom action bar ─────────────────────────────────────
         footer = QFrame()
-        footer.setObjectName("card")
+        footer.setObjectName("jobSetupFooter")
         footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         footer.setFixedHeight(72)
         footer.setStyleSheet(
+            f"QFrame#jobSetupFooter {{ "
             f"background-color: {COLORS['card_bg']}; "
-            f"border-top: 1px solid {COLORS['card_border']};"
+            f"border-top: 1px solid {COLORS['card_border']}; "
+            f"}}"
         )
 
         btn_row = QHBoxLayout(footer)
@@ -542,7 +548,6 @@ class StartupDialog(QDialog):
         btn_row.setSpacing(10)
 
         self._skip_btn = QPushButton("Skip, Don't Scan")
-        self._skip_btn.setObjectName("secondary")
         self._skip_btn.setFixedHeight(42)
         self._skip_btn.setCursor(Qt.PointingHandCursor)
         self._skip_btn.clicked.connect(self._on_skip)
@@ -551,7 +556,6 @@ class StartupDialog(QDialog):
         btn_row.addStretch()
 
         self._start_btn = QPushButton("Start Scan  ▶")
-        self._start_btn.setObjectName("primary")
         self._start_btn.setFixedHeight(42)
         self._start_btn.setMinimumWidth(320)
         self._start_btn.setCursor(Qt.PointingHandCursor)
@@ -559,6 +563,8 @@ class StartupDialog(QDialog):
         btn_row.addWidget(self._start_btn)
 
         outer.addWidget(footer, 0)
+        footer.raise_()
+        self._apply_job_setup_button_styles()
         self._refresh_start_button()
 
     # ── Ticket handling ───────────────────────────────────────────
@@ -705,6 +711,20 @@ class StartupDialog(QDialog):
         for checkbox in self._category_checks.values():
             checkbox.setChecked(checked)
 
+    def _apply_job_setup_button_styles(self):
+        self._skip_btn.setStyleSheet(
+            f"background-color: {COLORS['card_bg']}; "
+            f"color: {COLORS['text_primary']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 8px; padding: 0 18px; font-weight: bold; font-size: 12px;"
+        )
+        self._start_btn.setStyleSheet(
+            f"background-color: {COLORS['primary']}; "
+            f"color: {COLORS['text_white']}; "
+            "border: none; border-radius: 8px; padding: 0 22px; "
+            "font-weight: bold; font-size: 12px;"
+        )
+
     def _refresh_start_button(self):
         """Update primary action wording based on upload mode and ticket confirmation."""
         if not hasattr(self, '_start_btn'):
@@ -717,6 +737,7 @@ class StartupDialog(QDialog):
                 self._start_btn.setText("Confirm Ticket to Quick Upload  ▶")
         else:
             self._start_btn.setText("Start Full Scan  ▶")
+        self._apply_job_setup_button_styles()
 
     # ── Button handlers ───────────────────────────────────────────
 
@@ -1620,8 +1641,16 @@ class SettingsDialog(QDialog):
     def __init__(self, current_settings=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} \u2014 Settings")
-        self.setMinimumSize(700, 560)
-        self.resize(740, 680)
+        self.setMinimumSize(760, 620)
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            self.resize(
+                min(980, max(760, available.width() - 140)),
+                min(920, max(620, available.height() - 120)),
+            )
+        else:
+            self.resize(900, 820)
 
         self._settings = current_settings or load_settings()
         self.saved_settings = None  # set on save
@@ -1675,20 +1704,36 @@ class SettingsDialog(QDialog):
         body_layout.setSpacing(12)
 
         # API card
-        card = QWidget()
-        card.setStyleSheet(
-            f"background-color: {COLORS['card_bg']}; "
-            f"border: 1px solid {COLORS['card_border']}; "
-            f"border-radius: 12px;")
+        card = QFrame()
+        card.setObjectName("card")
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(16, 14, 16, 14)
         card_layout.setSpacing(8)
+
+        card_header = QHBoxLayout()
+        card_header.setSpacing(8)
 
         card_title = QLabel("RepairDesk API")
         card_title.setStyleSheet(
             f"font-size: 11pt; font-weight: bold; "
             f"color: {COLORS['text_primary']}; border: none;")
-        card_layout.addWidget(card_title)
+        card_header.addWidget(card_title)
+        card_header.addStretch()
+
+        api_prefilled = bool(
+            self._settings.get('store_name', '').strip() and self._settings.get('api_key', '').strip()
+        )
+        self._api_toggle_btn = QPushButton()
+        self._api_toggle_btn.setObjectName("secondary")
+        self._api_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self._api_toggle_btn.clicked.connect(self._toggle_api_card)
+        card_header.addWidget(self._api_toggle_btn)
+        card_layout.addLayout(card_header)
+
+        self._api_body = QWidget()
+        api_body_layout = QVBoxLayout(self._api_body)
+        api_body_layout.setContentsMargins(0, 0, 0, 0)
+        api_body_layout.setSpacing(8)
 
         # Store name row
         store_row = QHBoxLayout()
@@ -1703,7 +1748,7 @@ class SettingsDialog(QDialog):
         self._store_input.setText(self._settings.get('store_name', ''))
         self._store_input.setPlaceholderText("Your shop name")
         store_row.addWidget(self._store_input)
-        card_layout.addLayout(store_row)
+        api_body_layout.addLayout(store_row)
 
         # API Key row
         key_row = QHBoxLayout()
@@ -1723,7 +1768,7 @@ class SettingsDialog(QDialog):
         self._show_key_cb.setStyleSheet(f"border: none;")
         self._show_key_cb.toggled.connect(self._toggle_key_visibility)
         key_row.addWidget(self._show_key_cb)
-        card_layout.addLayout(key_row)
+        api_body_layout.addLayout(key_row)
 
         # URL row
         url_row = QHBoxLayout()
@@ -1738,7 +1783,7 @@ class SettingsDialog(QDialog):
         self._url_input.setText(
             self._settings.get('api_base_url', DEFAULTS['api_base_url']))
         url_row.addWidget(self._url_input)
-        card_layout.addLayout(url_row)
+        api_body_layout.addLayout(url_row)
 
         # Test connection row
         test_row = QHBoxLayout()
@@ -1755,9 +1800,7 @@ class SettingsDialog(QDialog):
             f"color: {COLORS['text_secondary']}; border: none;")
         test_row.addWidget(self._test_status)
         test_row.addStretch()
-        card_layout.addLayout(test_row)
-
-        body_layout.addWidget(card)
+        api_body_layout.addLayout(test_row)
 
         # Help text
         help_lbl = QLabel(
@@ -1766,16 +1809,21 @@ class SettingsDialog(QDialog):
             "in your RD account.")
         help_lbl.setObjectName("hint")
         help_lbl.setWordWrap(True)
-        body_layout.addWidget(help_lbl)
+        api_body_layout.addWidget(help_lbl)
+
+        card_layout.addWidget(self._api_body)
+        self._api_collapsed = api_prefilled
+        self._sync_api_card_toggle()
+        body_layout.addWidget(card)
 
         # ── WiFi Settings Card ────────────────────────────────────
-        wifi_card = QWidget()
+        wifi_card = QFrame()
         wifi_card.setObjectName("card")
         wifi_layout = QVBoxLayout(wifi_card)
         wifi_layout.setContentsMargins(16, 12, 16, 12)
         wifi_layout.setSpacing(8)
 
-        wifi_title = QLabel("Shop WiFi (Auto-Connect)")
+        wifi_title = QLabel("Auto Connect to WiFi")
         wifi_title.setStyleSheet(
             f"font-weight: bold; color: {COLORS['text_primary']}; border: none;")
         wifi_layout.addWidget(wifi_title)
@@ -1814,6 +1862,54 @@ class SettingsDialog(QDialog):
         wifi_layout.addLayout(pass_row)
 
         body_layout.addWidget(wifi_card)
+
+        # ── Technicians Card ──────────────────────────────────────
+        # Inline name fields — up to 5 techs, no dialog needed
+        techs_card = QWidget()
+        techs_card.setStyleSheet(
+            f"background-color: {COLORS['card_bg']}; "
+            f"border: 1px solid {COLORS['card_border']}; border-radius: 12px;")
+        techs_layout = QVBoxLayout(techs_card)
+        techs_layout.setContentsMargins(16, 14, 16, 14)
+        techs_layout.setSpacing(8)
+
+        techs_title = QLabel("Technicians")
+        techs_title.setStyleSheet(
+            f"font-size: 11pt; font-weight: bold; "
+            f"color: {COLORS['text_primary']}; border: none;")
+        techs_layout.addWidget(techs_title)
+
+        techs_hint = QLabel("Add tech names to track who ran each scan (up to 5).")
+        techs_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt; border: none;")
+        techs_layout.addWidget(techs_hint)
+
+        _field_style = (
+            f"background-color: {COLORS['console_bg']}; "
+            f"color: {COLORS['console_text']}; "
+            f"border: 1px solid {COLORS['card_border']}; "
+            "border-radius: 6px; padding: 5px 10px; font-size: 10pt;"
+        )
+        existing_names = [t.get('name', '') for t in get_technicians()]
+        self._tech_name_fields = []
+        for i in range(5):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            lbl = QLabel(f"{i + 1}.")
+            lbl.setFixedWidth(18)
+            lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; border: none;")
+            row.addWidget(lbl)
+            field = QLineEdit()
+            field.setPlaceholderText(f"Tech {i + 1} name")
+            field.setFixedHeight(32)
+            field.setStyleSheet(_field_style)
+            if i < len(existing_names):
+                field.setText(existing_names[i])
+            row.addWidget(field)
+            self._tech_name_fields.append(field)
+            techs_layout.addLayout(row)
+
+        body_layout.addWidget(techs_card)
 
         # ── App Updates Card ─────────────────────────────────────
         updates_card = QWidget()
@@ -1897,54 +1993,6 @@ class SettingsDialog(QDialog):
         updates_layout.addLayout(btns_row)
         body_layout.addWidget(updates_card)
 
-        # ── Technicians Card ──────────────────────────────────────
-        # Inline name fields — up to 5 techs, no dialog needed
-        techs_card = QWidget()
-        techs_card.setStyleSheet(
-            f"background-color: {COLORS['card_bg']}; "
-            f"border: 1px solid {COLORS['card_border']}; border-radius: 12px;")
-        techs_layout = QVBoxLayout(techs_card)
-        techs_layout.setContentsMargins(16, 14, 16, 14)
-        techs_layout.setSpacing(8)
-
-        techs_title = QLabel("Technicians")
-        techs_title.setStyleSheet(
-            f"font-size: 11pt; font-weight: bold; "
-            f"color: {COLORS['text_primary']}; border: none;")
-        techs_layout.addWidget(techs_title)
-
-        techs_hint = QLabel("Add tech names to track who ran each scan (up to 5).")
-        techs_hint.setStyleSheet(
-            f"color: {COLORS['text_secondary']}; font-size: 9pt; border: none;")
-        techs_layout.addWidget(techs_hint)
-
-        _field_style = (
-            f"background-color: {COLORS['console_bg']}; "
-            f"color: {COLORS['console_text']}; "
-            f"border: 1px solid {COLORS['card_border']}; "
-            "border-radius: 6px; padding: 5px 10px; font-size: 10pt;"
-        )
-        existing_names = [t.get('name', '') for t in get_technicians()]
-        self._tech_name_fields = []
-        for i in range(5):
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            lbl = QLabel(f"{i + 1}.")
-            lbl.setFixedWidth(18)
-            lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; border: none;")
-            row.addWidget(lbl)
-            field = QLineEdit()
-            field.setPlaceholderText(f"Tech {i + 1} name")
-            field.setFixedHeight(32)
-            field.setStyleSheet(_field_style)
-            if i < len(existing_names):
-                field.setText(existing_names[i])
-            row.addWidget(field)
-            self._tech_name_fields.append(field)
-            techs_layout.addLayout(row)
-
-        body_layout.addWidget(techs_card)
-
         body_layout.addStretch()
 
         # Version label
@@ -1982,6 +2030,16 @@ class SettingsDialog(QDialog):
         self._api_key_input.setEchoMode(
             QLineEdit.EchoMode.Normal if checked
             else QLineEdit.EchoMode.Password)
+
+    def _sync_api_card_toggle(self):
+        self._api_body.setVisible(not self._api_collapsed)
+        self._api_toggle_btn.setText(
+            "Show Details" if self._api_collapsed else "Hide Details"
+        )
+
+    def _toggle_api_card(self):
+        self._api_collapsed = not self._api_collapsed
+        self._sync_api_card_toggle()
 
     def _test_connection(self):
         self._test_status.setText("Testing...")

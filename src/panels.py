@@ -191,6 +191,7 @@ class SystemInfoPanel(QWidget):
         outer.addSpacing(12)
         outer.addLayout(action_row)
         self._apply_job_button_style(True)
+        self.set_button_enabled(False)
 
     # ── Public API ────────────────────────────────────────────────
 

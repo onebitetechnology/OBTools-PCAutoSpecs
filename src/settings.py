@@ -10,7 +10,7 @@ import json
 import logging
 
 APP_NAME = 'PC AutoSpec'
-APP_VERSION = '2.2.35'
+APP_VERSION = '2.2.36'
 
 # ---------------------------------------------------------------------------
 # Paths — everything lives next to the exe (portable)
