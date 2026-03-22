@@ -1213,9 +1213,42 @@ class ReportPreviewDialog(QDialog):
         h_layout.addWidget(hint)
         layout.addWidget(header)
 
+        # ── Job details summary ──────────────────────────────────
+        job_card = QFrame()
+        job_card.setObjectName("card")
+        job_layout = QVBoxLayout(job_card)
+        job_layout.setContentsMargins(14, 12, 14, 12)
+        job_layout.setSpacing(8)
+
+        job_header = QHBoxLayout()
+        job_header.setSpacing(8)
+        job_title = QLabel("Job Details")
+        job_title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 10pt; font-weight: bold;")
+        job_header.addWidget(job_title)
+        job_header.addStretch()
+
+        self._details_toggle_btn = QPushButton()
+        self._details_toggle_btn.setObjectName("secondary")
+        self._details_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self._details_toggle_btn.clicked.connect(self._toggle_details_editor)
+        job_header.addWidget(self._details_toggle_btn)
+        job_layout.addLayout(job_header)
+
+        self._job_summary = QLabel()
+        self._job_summary.setWordWrap(True)
+        self._job_summary.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9.5pt;")
+        job_layout.addWidget(self._job_summary)
+
+        self._details_editor = QWidget()
+        details_layout = QVBoxLayout(self._details_editor)
+        details_layout.setContentsMargins(0, 4, 0, 0)
+        details_layout.setSpacing(10)
+
         # ── Tech name + ticket row ───────────────────────────────
         fields_row = QHBoxLayout()
-        fields_row.setContentsMargins(0, 10, 0, 0)
+        fields_row.setContentsMargins(0, 0, 0, 0)
         fields_row.setSpacing(16)
 
         name_lbl = QLabel("Tech Name:")
@@ -1256,7 +1289,10 @@ class ReportPreviewDialog(QDialog):
         self._info_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 9pt;")
         fields_row.addWidget(self._info_label)
-        layout.addLayout(fields_row)
+        details_layout.addLayout(fields_row)
+
+        job_layout.addWidget(self._details_editor)
+        layout.addWidget(job_card)
 
         # ── Critical Issues panel ────────────────────────────────
         if self._issues:
@@ -1382,6 +1418,8 @@ class ReportPreviewDialog(QDialog):
         self._editor.textChanged.connect(self._update_char_count)
         self._set_upload_scope(self.upload_scope, rebuild=False)
         self._rebuild_preview()
+        self._details_collapsed = bool(prefill_ticket or prefill_tech_name)
+        self._sync_details_editor()
 
         # ── Upload button ────────────────────────────────────────
         self._upload_btn = QPushButton()
@@ -1431,6 +1469,7 @@ class ReportPreviewDialog(QDialog):
                 "Uploads the full diagnostic report, including detailed hardware and diagnostics."
             )
 
+        self._update_job_summary()
         if rebuild:
             self._rebuild_preview()
 
@@ -1499,12 +1538,39 @@ class ReportPreviewDialog(QDialog):
     # ── UI callbacks ─────────────────────────────────────────────
 
     def _on_ticket_changed(self, text):
+        self._update_job_summary()
         self._update_upload_button()
 
     def _on_fields_changed(self, text):
         self._specs['_job_tech_name'] = self._name_input.text().strip()
+        self._update_job_summary()
         self._rebuild_preview()
         self._update_upload_button()
+
+    def _toggle_details_editor(self):
+        self._details_collapsed = not self._details_collapsed
+        self._sync_details_editor()
+
+    def _sync_details_editor(self):
+        self._details_editor.setVisible(not self._details_collapsed)
+        self._details_toggle_btn.setText(
+            "Edit Details" if self._details_collapsed else "Hide Details"
+        )
+        self._update_job_summary()
+
+    def _update_job_summary(self):
+        tech = self._name_input.text().strip() or "Not set"
+        ticket = self._ticket_input.text().strip() or "Not set"
+        report_type = self._specs.get('_job_report_type') or "Not set"
+        scope = "System Overview only" if self.upload_scope == UPLOAD_SCOPE_OVERVIEW else "Full results"
+
+        summary_lines = [
+            f"<strong>Tech:</strong> {tech}",
+            f"<strong>Ticket:</strong> {ticket}",
+            f"<strong>Report Type:</strong> {report_type}",
+            f"<strong>Upload Content:</strong> {scope}",
+        ]
+        self._job_summary.setText("<br>".join(summary_lines))
 
     def _update_upload_button(self):
         """Update the upload button text and style based on current state."""
@@ -2024,12 +2090,12 @@ class SettingsDialog(QDialog):
                 text-align: center;
                 font-size: 10pt;
                 font-weight: bold;
-                padding: 1px;
+                padding: 0px;
             }}
             QProgressBar::chunk {{
                 background-color: {COLORS['primary']};
-                border-radius: 10px;
-                margin: 1px;
+                border-radius: 11px;
+                margin: 0px;
             }}
         """)
         self._update_progress.hide()
