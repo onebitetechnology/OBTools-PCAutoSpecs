@@ -2033,22 +2033,21 @@ class SettingsDialog(QDialog):
         downloaded = self._update_info.get('downloaded', False)
         has_download_url = bool(self._update_info.get('download_url'))
 
-        check_enabled = (
-            self._check_worker is None and self._download_worker is None
+        busy = self._check_worker is not None or self._download_worker is not None
+        install_enabled = (
+            supported and downloaded and bool(self._update_info.get('installer_path')) and not busy
         )
         download_enabled = (
-            supported and available and has_download_url and not downloaded and self._download_worker is None
+            supported and available and has_download_url and not downloaded and not busy
         )
-        install_enabled = (
-            supported and downloaded and bool(self._update_info.get('installer_path'))
-        )
+        check_enabled = not busy and not available and not downloaded
 
         self._check_updates_btn.setEnabled(check_enabled)
         self._download_update_btn.setEnabled(download_enabled)
         self._install_update_btn.setEnabled(install_enabled)
 
-        self._set_update_button_style(self._check_updates_btn, check_enabled, primary=True)
-        self._set_update_button_style(self._download_update_btn, download_enabled)
+        self._set_update_button_style(self._check_updates_btn, check_enabled, primary=check_enabled)
+        self._set_update_button_style(self._download_update_btn, download_enabled, primary=download_enabled)
         self._set_update_button_style(self._install_update_btn, install_enabled, primary=True)
 
     def _load_pending_update_state(self):
