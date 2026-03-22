@@ -75,9 +75,9 @@ _MSGBOX_STYLE = """
         color: white;
         border: none;
         border-radius: 5px;
-        padding: 6px 20px;
+        padding: 8px 28px;
         font-size: 10pt;
-        min-width: 80px;
+        min-width: 120px;
     }
     QMessageBox QPushButton:hover {
         background-color: #059669;
@@ -121,6 +121,10 @@ def _make_msgbox(parent, title, text, buttons=None, default=None):
         box.setStandardButtons(buttons)
     if default is not None:
         box.setDefaultButton(default)
+
+    for button in box.findChildren(QPushButton):
+        button.setMinimumWidth(132)
+        button.setMinimumHeight(38)
 
     # Force the main text label to wrap and reserve enough width before the
     # final size calculation, otherwise Windows DPI scaling can clip longer
@@ -176,8 +180,8 @@ class StartupDialog(QDialog):
     def __init__(self, parent=None, prefill_tech_name=""):
         super().__init__(parent)
         self.setWindowTitle("Job Setup")
-        self.setMinimumSize(720, 620)
-        self.setMaximumWidth(860)
+        self.setMinimumSize(760, 640)
+        self.setMaximumWidth(1120)
 
         # Result attributes (populated on accept or left as defaults on skip)
         self.tech_name       = ""
@@ -199,12 +203,12 @@ class StartupDialog(QDialog):
         if screen:
             available = screen.availableGeometry()
             self.resize(
-                min(820, max(720, available.width() - 120)),
-                min(760, max(620, available.height() - 120)),
+                min(1040, max(760, available.width() - 160)),
+                min(900, max(640, available.height() - 140)),
             )
-            self.setMaximumHeight(max(620, available.height() - 60))
+            self.setMaximumHeight(max(680, available.height() - 80))
         else:
-            self.resize(820, 760)
+            self.resize(960, 820)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -694,7 +698,7 @@ class StartupDialog(QDialog):
         )
         self.quick_upload_requested = self.upload_scope == UPLOAD_SCOPE_OVERVIEW
         if self.quick_upload_requested:
-            self.skip_categories = set(SCAN_CATEGORIES.keys())
+            self.skip_categories = set(self._category_checks.keys())
         else:
             self.skip_categories = {
                 key for key, cb in self._category_checks.items()
