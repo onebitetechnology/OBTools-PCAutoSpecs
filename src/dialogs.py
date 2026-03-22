@@ -5,10 +5,15 @@ ReportPreviewDialog: rendered HTML preview matching RepairDesk display.
 DetailDialog: drill-down popup for diagnostic sections.
 """
 
+import os
+import platform
 import re
 import logging
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPalette, QColor
+from pathlib import Path
+from urllib.parse import quote
+
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl
+from PySide6.QtGui import QPalette, QColor, QDesktopServices
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
@@ -26,7 +31,7 @@ from settings import (
     UPLOAD_SCOPE_CHOICES, DEFAULT_UPLOAD_SCOPE,
     UPLOAD_SCOPE_OVERVIEW, UPLOAD_SCOPE_FULL,
     get_tech_names, get_tech_api_key, save_technicians,
-    get_technicians,
+    get_technicians, get_app_dir,
 )
 from repairdesk_api import RepairDeskAPI
 from updater import get_pending_update, launch_pending_update
@@ -153,6 +158,94 @@ def _make_msgbox(parent, title, text, buttons=None, default=None):
             geo.y() + max(0, (geo.height() - box.height()) // 2),
         )
     return box
+
+
+class RoundedProgressWidget(QWidget):
+    """Progress widget with a rounded track and centered text label."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._minimum = 0
+        self._maximum = 100
+        self._value = 0
+        self._format = "%p%"
+        self._text_visible = True
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._track = QFrame()
+        self._track.setObjectName("updateProgressTrack")
+        self._track.setFixedHeight(24)
+        self._track.setStyleSheet(f"""
+            QFrame#updateProgressTrack {{
+                background-color: {COLORS['console_bg']};
+                border: 1px solid {COLORS['card_border']};
+                border-radius: 12px;
+            }}
+        """)
+        layout.addWidget(self._track)
+
+        stack = QGridLayout(self._track)
+        stack.setContentsMargins(2, 2, 2, 2)
+        stack.setSpacing(0)
+
+        self._bar = QProgressBar()
+        self._bar.setTextVisible(False)
+        self._bar.setRange(self._minimum, self._maximum)
+        self._bar.setValue(self._value)
+        self._bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: transparent;
+                border: none;
+            }}
+            QProgressBar::chunk {{
+                background-color: {COLORS['primary']};
+                border-radius: 9px;
+            }}
+        """)
+        stack.addWidget(self._bar, 0, 0)
+
+        self._label = QLabel("0%")
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._label.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 10pt; font-weight: bold; border: none;"
+        )
+        stack.addWidget(self._label, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    def setFixedHeight(self, height):
+        super().setFixedHeight(height)
+        self._track.setFixedHeight(height)
+
+    def setRange(self, minimum, maximum):
+        self._minimum = minimum
+        self._maximum = maximum
+        self._bar.setRange(minimum, maximum)
+        self._update_label()
+
+    def setValue(self, value):
+        self._value = value
+        self._bar.setValue(value)
+        self._update_label()
+
+    def setTextVisible(self, visible):
+        self._text_visible = bool(visible)
+        self._label.setVisible(self._text_visible)
+
+    def setFormat(self, fmt):
+        self._format = fmt or "%p%"
+        self._update_label()
+
+    def _update_label(self):
+        if not self._text_visible:
+            return
+        span = max(1, self._maximum - self._minimum)
+        percent = int(round(((self._value - self._minimum) / span) * 100))
+        percent = max(0, min(100, percent))
+        text = self._format.replace("%p%", f"{percent}%")
+        self._label.setText(text)
 
 
 # ─── Startup / Job Setup Dialog ──────────────────────────────────────
@@ -2091,29 +2184,12 @@ class SettingsDialog(QDialog):
             f"color: {COLORS['text_secondary']}; border: none;")
         updates_layout.addWidget(self._update_status)
 
-        self._update_progress = QProgressBar()
+        self._update_progress = RoundedProgressWidget()
         self._update_progress.setRange(0, 100)
         self._update_progress.setValue(0)
         self._update_progress.setTextVisible(True)
         self._update_progress.setFormat("%p%")
-        self._update_progress.setFixedHeight(22)
-        self._update_progress.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: {COLORS['console_bg']};
-                color: {COLORS['text_primary']};
-                border: 1px solid {COLORS['card_border']};
-                border-radius: 11px;
-                text-align: center;
-                font-size: 10pt;
-                font-weight: bold;
-                padding: 0px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {COLORS['primary']};
-                border-radius: 11px;
-                margin: 0px;
-            }}
-        """)
+        self._update_progress.setFixedHeight(24)
         self._update_progress.hide()
         updates_layout.addWidget(self._update_progress)
 
@@ -2141,6 +2217,25 @@ class SettingsDialog(QDialog):
         btns_row.addWidget(self._install_update_btn)
 
         updates_layout.addLayout(btns_row)
+
+        feedback_row = QHBoxLayout()
+        feedback_row.setSpacing(8)
+
+        self._feedback_btn = QPushButton("Feature Request / Report Bug")
+        self._feedback_btn.setObjectName("secondary")
+        self._feedback_btn.setCursor(Qt.PointingHandCursor)
+        self._feedback_btn.clicked.connect(self._on_feedback_email)
+        feedback_row.addWidget(self._feedback_btn, 0)
+
+        feedback_hint = QLabel(
+            "Opens your email app with version details and the latest log path."
+        )
+        feedback_hint.setWordWrap(True)
+        feedback_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt; border: none;")
+        feedback_row.addWidget(feedback_hint, 1)
+
+        updates_layout.addLayout(feedback_row)
         body_layout.addWidget(updates_card)
 
         body_layout.addStretch()
@@ -2190,6 +2285,64 @@ class SettingsDialog(QDialog):
     def _toggle_api_card(self):
         self._api_collapsed = not self._api_collapsed
         self._sync_api_card_toggle()
+
+    def _get_latest_log_path(self):
+        log_dir = Path(get_app_dir()) / "logs"
+        if not log_dir.is_dir():
+            return None
+        candidates = sorted(
+            log_dir.glob("AutoSpecUploader_*.log"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
+
+    def _build_feedback_email(self):
+        latest_log = self._get_latest_log_path()
+        channel = "Beta" if self._include_beta_updates_cb.isChecked() else "Stable"
+        machine_name = os.environ.get("COMPUTERNAME") or platform.node() or "Unknown"
+
+        subject = f"PC AutoSpec Feedback - v{APP_VERSION}"
+        body_lines = [
+            "Please describe the bug or feature request here:",
+            "",
+            "What happened:",
+            "",
+            "What you expected:",
+            "",
+            "Steps to reproduce (if reporting a bug):",
+            "",
+            "---",
+            f"App version: {APP_VERSION}",
+            f"Update channel selected: {channel}",
+            f"Machine name: {machine_name}",
+            f"Platform: {platform.system()} {platform.release()}",
+            "",
+            "Please attach the latest log file if this is a bug report.",
+            f"Latest log path: {latest_log if latest_log else 'No log file found yet'}",
+            "",
+            "If your email app does not attach files automatically, attach the log manually from the path above.",
+        ]
+        return subject, "\n".join(body_lines), latest_log
+
+    def _on_feedback_email(self):
+        subject, body, latest_log = self._build_feedback_email()
+        mailto = f"mailto:?subject={quote(subject)}&body={quote(body)}"
+
+        if QDesktopServices.openUrl(QUrl(mailto)):
+            return
+
+        fallback = _make_msgbox(
+            self,
+            "Email App Not Available",
+            "PC AutoSpec could not open your default email app.\n\n"
+            "A support template has been copied to your clipboard.\n"
+            + (f"\nLatest log: {latest_log}" if latest_log else ""),
+            QMessageBox.StandardButton.Ok,
+            QMessageBox.StandardButton.Ok,
+        )
+        QApplication.clipboard().setText(f"Subject: {subject}\n\n{body}")
+        fallback.exec()
 
     def _sync_wifi_card_toggle(self):
         self._wifi_body.setVisible(not self._wifi_collapsed)
