@@ -211,22 +211,8 @@ class ReportFormatter:
                     key, value = part.split(':', 1)
                     details[key.strip()] = value.strip()
 
-            os_parts = []
             if details.get('Edition'):
-                os_parts.append(details['Edition'])
-            elif specs.get('OS'):
-                os_parts.append(specs['OS'])
-
-            version_parts = []
-            if details.get('Version'):
-                version_parts.append(f"Version {details['Version']}")
-            if details.get('Build'):
-                version_parts.append(f"Build {details['Build']}")
-            if version_parts:
-                os_parts.append(', '.join(version_parts))
-
-            if os_parts:
-                return ' — '.join(os_parts)
+                return details['Edition']
 
         return specs.get('OS', 'Unknown')
 
@@ -244,13 +230,21 @@ class ReportFormatter:
         if ram_raw == 'Test skipped':
             return 'Test skipped'
 
-        match = re.search(
-            r'([\d.]+\s*GB(?:\s+DDR\d+)?(?:\s*@\s*[\d]+MHz)?)', ram_raw
-        )
-        summary = match.group(1) if match else ram_raw
-        used_match = re.search(r'([\d.]+)% used', ram_raw)
-        if used_match:
-            summary = f"{summary} ({used_match.group(1)}% used)"
+        total_match = re.search(r'([\d.]+)\s*GB', ram_raw)
+        mem_type_match = re.search(r'\b(DDR\d+|LPDDR\dX?|Unified Memory)\b', ram_raw, re.IGNORECASE)
+
+        if total_match:
+            try:
+                rounded_total = int(round(float(total_match.group(1))))
+                summary = f"{rounded_total}GB"
+            except ValueError:
+                summary = total_match.group(0).replace(' ', '')
+        else:
+            return ram_raw
+
+        if mem_type_match:
+            mem_type = mem_type_match.group(1).upper()
+            return f"{summary} of {mem_type}"
         return summary
 
     def _build_storage_overview(self, specs):

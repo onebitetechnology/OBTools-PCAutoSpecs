@@ -41,7 +41,7 @@ from theme import COLORS, build_stylesheet
 from settings import (
     APP_NAME, APP_VERSION, load_settings, is_configured, is_first_run_setup_complete,
     get_app_dir, get_assets_dir, get_window_title, get_lhm_path,
-    get_active_api_key, DEFAULT_UPLOAD_SCOPE, UPLOAD_SCOPE_OVERVIEW,
+    get_active_api_key, DEFAULT_UPLOAD_SCOPE, UPLOAD_SCOPE_OVERVIEW, UPLOAD_SCOPE_FULL,
 )
 from repairdesk_api import RepairDeskAPI
 from report_formatter import ReportFormatter
@@ -215,9 +215,9 @@ class MainWindow(QMainWindow):
 
         h_layout.addStretch()
 
-        settings_btn = QPushButton("\u2699")
-        settings_btn.setObjectName("flat")
-        settings_btn.setFixedSize(40, 40)
+        settings_btn = QPushButton("\u2699  Settings")
+        settings_btn.setObjectName("secondary")
+        settings_btn.setFixedHeight(40)
         settings_btn.setCursor(Qt.PointingHandCursor)
         settings_btn.setToolTip("Settings")
         settings_btn.clicked.connect(self._open_settings)
@@ -893,10 +893,13 @@ class MainWindow(QMainWindow):
                 'success')
             self._status_bar.showMessage(
                 f"Upload complete \u2014 ticket {ticket_display}")
-            QMessageBox.information(
-                self, "Upload Complete",
-                f"Diagnostic note successfully added to "
-                f"ticket {ticket_display}.")
+            if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW:
+                self._handle_quick_upload_complete(ticket_display)
+            else:
+                QMessageBox.information(
+                    self, "Upload Complete",
+                    f"Diagnostic note successfully added to "
+                    f"ticket {ticket_display}.")
         else:
             self._log_panel.append(
                 f"  \u2717 Upload failed: {message}\n\n", 'error')
@@ -905,6 +908,39 @@ class MainWindow(QMainWindow):
                 self, "Upload Failed",
                 f"Failed to upload diagnostic note:\n\n{message}")
         self._maybe_prompt_for_update()
+
+    def _handle_quick_upload_complete(self, ticket_display):
+        QMessageBox.information(
+            self,
+            "Quick Upload Complete",
+            f"System details were successfully uploaded to {ticket_display}.",
+        )
+
+        choice_box = _make_msgbox(
+            self,
+            "Next Step",
+            "What would you like to do next?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+        yes_btn = choice_box.button(QMessageBox.StandardButton.Yes)
+        no_btn = choice_box.button(QMessageBox.StandardButton.No)
+        cancel_btn = choice_box.button(QMessageBox.StandardButton.Cancel)
+        if yes_btn:
+            yes_btn.setText("Perform Full Scan")
+        if no_btn:
+            no_btn.setText("Close App / Eject USB")
+        if cancel_btn:
+            cancel_btn.setText("Stay Here")
+
+        reply = choice_box.exec()
+        if reply == int(QMessageBox.StandardButton.Yes):
+            self._job_quick_upload = False
+            self._job_upload_scope = UPLOAD_SCOPE_FULL
+            self._job_skip_cats = set()
+            self._start_spec_collection()
+        elif reply == int(QMessageBox.StandardButton.No):
+            self.close()
 
     # ── Settings ──────────────────────────────────────────────────
 
