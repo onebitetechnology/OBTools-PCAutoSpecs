@@ -1116,31 +1116,57 @@ class MainWindow(QMainWindow):
         logging.info("Application closed")
 
     def _prompt_eject(self):
-        """Ask tech if they want to eject the USB, then do it."""
+        """Ask tech if they want to eject the USB after the app closes."""
         import subprocess
+        import json
         try:
             app_dir = get_app_dir()
             drive = os.path.splitdrive(app_dir)[0]
             if not drive:
                 return
 
-            # Only prompt if on a removable drive
+            # Prompt only when running from a USB/removable drive. Some modern
+            # USB SSDs report as "fixed", so also check the underlying bus/interface.
             ps_check = f"""
-            $type = (Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='{drive}'").DriveType
-            Write-Output $type
+            $logical = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='{drive}'" -ErrorAction SilentlyContinue
+            if (-not $logical) {{ return }}
+            $partition = @(Get-CimAssociatedInstance -InputObject $logical -ResultClassName Win32_DiskPartition -ErrorAction SilentlyContinue)[0]
+            $disk = $null
+            if ($partition) {{
+                $disk = @(Get-CimAssociatedInstance -InputObject $partition -ResultClassName Win32_DiskDrive -ErrorAction SilentlyContinue)[0]
+            }}
+            [PSCustomObject]@{{
+                Drive = '{drive}'
+                DriveType = [string]$logical.DriveType
+                InterfaceType = if ($disk) {{ $disk.InterfaceType }} else {{ '' }}
+                Model = if ($disk) {{ $disk.Model }} else {{ '' }}
+                PNPDeviceID = if ($disk) {{ $disk.PNPDeviceID }} else {{ '' }}
+            }} | ConvertTo-Json -Compress
             """
             result = subprocess.run(
                 ['powershell', '-NoProfile', '-Command', ps_check],
                 capture_output=True, text=True, timeout=5,
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
-            if result.stdout.strip() != '2':
-                return  # Not a removable drive — skip silently
+            drive_info = json.loads(result.stdout.strip()) if result.stdout.strip() else {}
+            drive_type = str(drive_info.get('DriveType', '')).strip()
+            interface_type = str(drive_info.get('InterfaceType', '')).upper()
+            model = str(drive_info.get('Model', '')).upper()
+            pnp_id = str(drive_info.get('PNPDeviceID', '')).upper()
+            is_usb_drive = (
+                drive_type == '2'
+                or 'USB' in interface_type
+                or pnp_id.startswith('USB')
+                or 'USB' in model
+            )
+            if not is_usb_drive:
+                return  # Not a removable/USB drive — skip silently
 
             box = QMessageBox()
             box.setWindowTitle("Eject USB?")
             box.setText(
-                f"Safely eject the USB drive ({drive}) before removing it?"
+                f"PC AutoSpec will close first, then Windows will try to eject {drive}.\n\n"
+                "Do that now?"
             )
             box.setWindowModality(Qt.WindowModality.ApplicationModal)
             box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
@@ -1160,16 +1186,23 @@ class MainWindow(QMainWindow):
 
             if box.exec() == QMessageBox.Yes.value:
                 ps_eject = f"""
+                Start-Sleep -Seconds 2
                 $shell = New-Object -ComObject Shell.Application
                 $d = $shell.Namespace('{drive}\\')
                 if ($d) {{ $d.Self.InvokeVerb('Eject') }}
                 """
-                subprocess.run(
-                    ['powershell', '-NoProfile', '-Command', ps_eject],
-                    capture_output=True, text=True, timeout=8,
-                    creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags = (
+                    getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                    | getattr(subprocess, 'DETACHED_PROCESS', 0)
+                    | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
                 )
-                logging.info(f"USB eject command issued for {drive}")
+                subprocess.Popen(
+                    ['powershell', '-NoProfile', '-Command', ps_eject],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags
+                )
+                logging.info(f"USB eject scheduled for {drive} after app exit")
             else:
                 logging.info("USB eject declined by user")
 
