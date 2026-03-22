@@ -4,7 +4,7 @@
 [Setup]
 AppId={{4A5CF2A4-47A4-4C14-A7D3-29D1F2B5C061}
 AppName={#MyAppName}
-AppVersion=2.2.32
+AppVersion=2.2.34
 AppPublisher=One Bite Technology
 DefaultDirName={autopf}\One Bite Technology\PC AutoSpec
 DefaultGroupName=PC AutoSpec

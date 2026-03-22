@@ -743,6 +743,8 @@ class ReportFormatter:
                 sensor_suffix = f" — {sensor}" if sensor else ""
                 lines.append(f"<strong>CPU Temp (Idle):</strong> {t:.0f}°C {t_label}{sensor_suffix}")
             load = advanced.get('cpu_load_temp', {})
+            if load.get('status') == 'cancelled':
+                lines.append("<strong>CPU Temp (Load):</strong> Cancelled by tech")
             if load.get('status') == 'ok' and load.get('peak_temp_c'):
                 aborted = load.get('aborted', False)
                 peak = load['peak_temp_c']

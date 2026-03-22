@@ -641,6 +641,7 @@ class MainWindow(QMainWindow):
     def _on_stress_started(self):
         """Show the stress test progress dialog."""
         self._stress_dialog = StressTestDialog(duration_sec=20, ramp_sec=60, parent=self)
+        self._stress_dialog.cancel_requested.connect(self._cancel_stress_test)
         self._stress_dialog.show()
 
     def _on_stress_temp(self, temp_c: float):
@@ -653,6 +654,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_stress_dialog') and self._stress_dialog:
             self._stress_dialog.finish()
             self._stress_dialog = None
+
+    def _cancel_stress_test(self):
+        """Request cancellation of the active CPU stress test."""
+        if hasattr(self, '_stress_dialog') and self._stress_dialog:
+            self._stress_dialog.mark_cancelling()
+
+        if hasattr(self, '_spec_worker') and self._spec_worker:
+            self._spec_worker.cancel_stress_test()
+
+        self._status_bar.showMessage("Cancelling CPU stress test...")
+        self._log_panel.append("  Cancelling CPU stress test...\n", 'warning')
 
     def _on_log_message(self, msg):
         """Feed log messages to both the activity log and the spinner."""

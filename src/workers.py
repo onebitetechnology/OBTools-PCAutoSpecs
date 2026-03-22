@@ -23,10 +23,16 @@ class SpecCollectorWorker(QThread):
         super().__init__(parent)
         self.skip_categories = skip_categories or set()
         self.quick_mode = quick_mode
+        self._cancel_stress_test = False
+
+    def cancel_stress_test(self):
+        """Request cancellation of the CPU stress test phase."""
+        self._cancel_stress_test = True
 
     def run(self):
         specs = None
         try:
+            self._cancel_stress_test = False
             import pythoncom
             pythoncom.CoInitialize()
             try:
@@ -54,6 +60,7 @@ class SpecCollectorWorker(QThread):
                             stress_started_callback=lambda: self.stress_test_started.emit(),
                             stress_temp_callback=lambda t: self.stress_test_temp.emit(t),
                             stress_finished_callback=lambda: self.stress_test_finished.emit(),
+                            stress_cancel_requested_callback=lambda: self._cancel_stress_test,
                             skip_categories=self.skip_categories,
                         )
                         specs['AdvancedHealth'] = adv_health

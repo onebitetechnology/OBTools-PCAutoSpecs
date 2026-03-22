@@ -190,6 +190,7 @@ class SystemInfoPanel(QWidget):
 
         outer.addSpacing(12)
         outer.addLayout(action_row)
+        self._apply_job_button_style(True)
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -216,6 +217,19 @@ class SystemInfoPanel(QWidget):
 
     def set_job_button_enabled(self, enabled):
         self._job_btn.setEnabled(enabled)
+        self._apply_job_button_style(enabled)
+
+    def _apply_job_button_style(self, enabled):
+        btn_base = ("border: none; border-radius: 8px;"
+                    "font-weight: bold; font-size: 13px;")
+        if enabled:
+            self._job_btn.setStyleSheet(
+                f"background-color: {COLORS['primary']}; color: #FFFFFF;"
+                f"{btn_base}")
+        else:
+            self._job_btn.setStyleSheet(
+                f"background-color: #0C8C62; color: #A8D8C0;"
+                f"{btn_base}")
 
     def show_scan_skipped(self):
         """Render all sections in a clear idle state after the tech skips scanning."""
@@ -521,6 +535,8 @@ class SystemInfoPanel(QWidget):
 
             # CPU Temperature — under load
             load_temp = advanced.get('cpu_load_temp', {})
+            if load_temp.get('status') == 'cancelled':
+                sec.add_info_row('Temp — Load', 'Cancelled by tech', color=COLORS['warning'])
             if load_temp.get('status') == 'ok' and load_temp.get('peak_temp_c'):
                 peak = load_temp['peak_temp_c']
                 aborted = load_temp.get('aborted', False)

@@ -1102,7 +1102,8 @@ def collect_cpu_temp_under_load(
         log_callback=None,
         started_callback=None,
         temp_callback=None,
-        finished_callback=None) -> Dict[str, Any]:
+        finished_callback=None,
+        cancel_requested_callback=None) -> Dict[str, Any]:
     """
     Stress all CPU cores for `duration_sec` seconds and record peak temperature.
 
@@ -1122,6 +1123,14 @@ def collect_cpu_temp_under_load(
         logging.info(msg)
         if log_callback:
             log_callback(msg)
+
+    def _cancel_requested() -> bool:
+        if not cancel_requested_callback:
+            return False
+        try:
+            return bool(cancel_requested_callback())
+        except Exception:
+            return False
 
     workers = []
     load_queues = []
@@ -1149,6 +1158,16 @@ def collect_cpu_temp_under_load(
             except Exception:
                 pass
 
+        if _cancel_requested():
+            _log("  CPU stress test cancelled before ramp began\n")
+            return {
+                "status": "cancelled",
+                "aborted": True,
+                "abort_reason": "Cancelled by tech",
+                "samples": [],
+                "duration_sec": 0,
+            }
+
         # ── Ramp phase — increase duty cycle 20% → 100% ───────────
         # Update every second, stepping load up smoothly
         ramp_start = time.monotonic()
@@ -1156,6 +1175,17 @@ def collect_cpu_temp_under_load(
         ramp_peak = 0.0  # track highest temp seen during ramp
         last_sensor = None
         while time.monotonic() - ramp_start < ramp_sec:
+            if _cancel_requested():
+                _log("  CPU stress test cancelled during ramp-up\n")
+                return {
+                    "status": "cancelled",
+                    "peak_temp_c": round(ramp_peak, 1) if ramp_peak > 0 else None,
+                    "sensor": last_sensor,
+                    "aborted": True,
+                    "abort_reason": "Cancelled by tech",
+                    "samples": [],
+                    "duration_sec": round(time.monotonic() - ramp_start, 1),
+                }
             time.sleep(ramp_step_sec)
             elapsed = time.monotonic() - ramp_start
             # Linear ramp from 0.2 to 1.0
@@ -1208,6 +1238,18 @@ def collect_cpu_temp_under_load(
         start = time.monotonic()
 
         while time.monotonic() - start < duration_sec:
+            if _cancel_requested():
+                _log("  CPU stress test cancelled during measurement phase\n")
+                return {
+                    "status": "cancelled",
+                    "peak_temp_c": round(max(ramp_peak, max(samples) if samples else 0.0), 1)
+                    if (ramp_peak > 0 or samples) else None,
+                    "sensor": last_sensor,
+                    "aborted": True,
+                    "abort_reason": "Cancelled by tech",
+                    "samples": samples,
+                    "duration_sec": round(time.monotonic() - start, 1),
+                }
             time.sleep(1)
             temp_info = _collect_cpu_temp_info()
             temp = temp_info.get('temp_c') if temp_info else None
@@ -2014,6 +2056,7 @@ def collect_advanced_health_summary(
         stress_started_callback=None,
         stress_temp_callback=None,
         stress_finished_callback=None,
+        stress_cancel_requested_callback=None,
         skip_categories=None) -> Dict[str, Any]:
     """
     Collect extended system health checks.
@@ -2127,6 +2170,7 @@ def collect_advanced_health_summary(
                 started_callback=stress_started_callback,
                 temp_callback=stress_temp_callback,
                 finished_callback=stress_finished_callback,
+                cancel_requested_callback=stress_cancel_requested_callback,
             )
         except Exception as e:
             logging.warning(f"CPU load temp failed: {e}")

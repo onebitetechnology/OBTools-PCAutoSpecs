@@ -533,7 +533,7 @@ class StartupDialog(QDialog):
         footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         footer.setFixedHeight(72)
         footer.setStyleSheet(
-            f"background-color: {COLORS['bg_card']}; "
+            f"background-color: {COLORS['card_bg']}; "
             f"border-top: 1px solid {COLORS['card_border']};"
         )
 
@@ -2206,6 +2206,7 @@ class SettingsDialog(QDialog):
 # ─── CPU Stress Test Progress Dialog ────────────────────────────────
 
 class StressTestDialog(QDialog):
+    cancel_requested = Signal()
     """
     Modal dialog shown during the CPU load temperature test.
 
@@ -2293,6 +2294,18 @@ class StressTestDialog(QDialog):
         body.addWidget(note)
 
         body.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        self._cancel_btn = QPushButton("Cancel Stress Test")
+        self._cancel_btn.setObjectName("secondary")
+        self._cancel_btn.setFixedHeight(38)
+        self._cancel_btn.setCursor(Qt.PointingHandCursor)
+        self._cancel_btn.clicked.connect(self._on_cancel_clicked)
+        btn_row.addWidget(self._cancel_btn)
+
+        body.addLayout(btn_row)
         outer.addLayout(body)
 
         # ── Tick timer ────────────────────────────────────────────
@@ -2352,6 +2365,19 @@ class StressTestDialog(QDialog):
         self._finished = True
         self._timer.stop()
         self.accept()
+
+    def mark_cancelling(self):
+        """Lock the dialog into a waiting state while the worker unwinds."""
+        self._cancel_btn.setEnabled(False)
+        self._header_lbl.setText("Stopping CPU Stress Test...")
+        self._countdown_lbl.setText("Cancelling test and letting the scan continue...")
+        self._info_lbl.setText(
+            "The CPU load is being stopped now. This can take a moment while the worker process exits cleanly."
+        )
+
+    def _on_cancel_clicked(self):
+        self.mark_cancelling()
+        self.cancel_requested.emit()
 
     def closeEvent(self, event):
         """Prevent manual close during test."""
