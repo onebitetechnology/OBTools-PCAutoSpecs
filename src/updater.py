@@ -20,12 +20,12 @@ from typing import Callable, Dict, Optional
 
 import requests
 
-from settings import APP_NAME, APP_VERSION
+from settings import APP_NAME, APP_VERSION, load_settings
 
 REPO_OWNER = "onebitetechnology"
 REPO_NAME = "OBTools-PCAutoSpecs"
-GITHUB_LATEST_RELEASE_URL = (
-    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+GITHUB_RELEASES_URL = (
+    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases"
 )
 INSTALLER_ASSET_NAME = "PCAutoSpec-Setup.exe"
 
@@ -41,10 +41,53 @@ def _normalize_version(version: str) -> str:
 
 def _version_key(version: str) -> tuple:
     cleaned = _normalize_version(version)
-    parts = re.findall(r"\d+", cleaned)
-    if not parts:
-        return (0,)
-    return tuple(int(part) for part in parts)
+    main, _, suffix = cleaned.partition("-")
+    parts = re.findall(r"\d+", main)
+    main_key = tuple(int(part) for part in parts) if parts else (0,)
+    if not suffix:
+        return main_key + ((1,),)
+
+    suffix_lower = suffix.lower()
+    if suffix_lower.startswith(("alpha", "a")):
+        stage = 0
+    elif suffix_lower.startswith(("beta", "b")):
+        stage = 1
+    elif suffix_lower.startswith("rc"):
+        stage = 2
+    else:
+        stage = 0
+    suffix_numbers = tuple(int(part) for part in re.findall(r"\d+", suffix_lower)) or (0,)
+    return main_key + ((0, stage, suffix_numbers),)
+
+
+def _is_prerelease(release_data: Dict) -> bool:
+    if bool(release_data.get("prerelease")):
+        return True
+    tag = _normalize_version(release_data.get("tag_name") or release_data.get("name") or "")
+    return "-" in tag
+
+
+def _select_release(releases: list[Dict], include_prereleases: bool) -> Optional[Dict]:
+    eligible = []
+    for release in releases:
+        if release.get("draft"):
+            continue
+        if not include_prereleases and _is_prerelease(release):
+            continue
+        version = _normalize_version(release.get("tag_name") or release.get("name") or "")
+        if not version:
+            continue
+        eligible.append(release)
+
+    if not eligible:
+        return None
+
+    return max(
+        eligible,
+        key=lambda release: _version_key(
+            release.get("tag_name") or release.get("name") or ""
+        ),
+    )
 
 
 def _download_root() -> Path:
@@ -106,11 +149,15 @@ def _select_installer_asset(release_data: Dict) -> Optional[Dict]:
     return None
 
 
-def check_for_updates(timeout: int = 20) -> Dict:
+def check_for_updates(include_prereleases: Optional[bool] = None, timeout: int = 20) -> Dict:
     """Query the latest GitHub Release and compare it to the running app version."""
+    if include_prereleases is None:
+        include_prereleases = bool(load_settings().get("include_beta_updates", False))
+
     state = {
         "supported": is_update_supported(),
         "current_version": APP_VERSION,
+        "include_prereleases": include_prereleases,
         "latest_version": None,
         "available": False,
         "downloaded": False,
@@ -120,6 +167,7 @@ def check_for_updates(timeout: int = 20) -> Dict:
         "download_url": None,
         "html_url": None,
         "published_at": None,
+        "prerelease": False,
     }
 
     if not state["supported"]:
@@ -143,16 +191,24 @@ def check_for_updates(timeout: int = 20) -> Dict:
 
     try:
         response = requests.get(
-            GITHUB_LATEST_RELEASE_URL,
+            GITHUB_RELEASES_URL,
             headers={"Accept": "application/vnd.github+json"},
+            params={"per_page": 20},
             timeout=timeout,
         )
         response.raise_for_status()
-        release_data = response.json()
+        releases = response.json()
     except Exception as e:
         if state["downloaded"]:
             return state
         state["message"] = f"Update check failed: {e}"
+        return state
+
+    release_data = _select_release(releases, include_prereleases)
+    if not release_data:
+        state["message"] = (
+            "No matching releases were found for the selected update channel."
+        )
         return state
 
     latest_version = _normalize_version(
@@ -166,6 +222,7 @@ def check_for_updates(timeout: int = 20) -> Dict:
         "release_notes": release_notes,
         "html_url": release_data.get("html_url"),
         "published_at": release_data.get("published_at"),
+        "prerelease": _is_prerelease(release_data),
     })
 
     if not latest_version:
@@ -204,7 +261,8 @@ def check_for_updates(timeout: int = 20) -> Dict:
         )
         return state
 
-    state["message"] = f"Update {latest_version} is available."
+    release_label = "Beta update" if state["prerelease"] else "Update"
+    state["message"] = f"{release_label} {latest_version} is available."
     return state
 
 

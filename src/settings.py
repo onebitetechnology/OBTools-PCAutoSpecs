@@ -10,7 +10,7 @@ import json
 import logging
 
 APP_NAME = 'PC AutoSpec'
-APP_VERSION = '2.2.44'
+APP_VERSION = '2.2.45-beta.1'
 
 # ---------------------------------------------------------------------------
 # Paths — everything lives next to the exe (portable)
@@ -56,6 +56,7 @@ DEFAULTS = {
     'store_name': '',
     'api_base_url': 'https://api.repairdesk.co/api/web/v1',
     'tickets_per_page': 100,
+    'include_beta_updates': False,
     'wifi_ssid': '',
     'wifi_password': '',
     'wifi_auto_connect': True,

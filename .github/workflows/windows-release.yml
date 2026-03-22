@@ -53,6 +53,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           files: |
             release/PCAutoSpec-Setup.exe
             release/PCAutoSpec-portable.zip

@@ -2069,6 +2069,22 @@ class SettingsDialog(QDialog):
         latest_row.addStretch()
         updates_layout.addLayout(latest_row)
 
+        self._include_beta_updates_cb = QCheckBox("Include beta builds")
+        self._include_beta_updates_cb.setChecked(
+            bool(self._settings.get('include_beta_updates', False))
+        )
+        self._include_beta_updates_cb.setStyleSheet(
+            f"color: {COLORS['text_primary']}; border: none;")
+        updates_layout.addWidget(self._include_beta_updates_cb)
+
+        beta_hint = QLabel(
+            "Enable this to receive beta/prerelease builds in addition to normal stable releases."
+        )
+        beta_hint.setWordWrap(True)
+        beta_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt; border: none;")
+        updates_layout.addWidget(beta_hint)
+
         self._update_status = QLabel("Update checks are idle.")
         self._update_status.setWordWrap(True)
         self._update_status.setStyleSheet(
@@ -2320,7 +2336,10 @@ class SettingsDialog(QDialog):
         self._update_latest_version.setText("Checking...")
         self._check_updates_btn.setEnabled(False)
 
-        self._check_worker = UpdateCheckWorker(self)
+        self._check_worker = UpdateCheckWorker(
+            include_prereleases=self._include_beta_updates_cb.isChecked(),
+            parent=self,
+        )
         self._check_worker.finished.connect(self._on_update_check_finished)
         self._check_worker.error.connect(self._on_update_check_error)
         self._check_worker.start()
@@ -2432,6 +2451,7 @@ class SettingsDialog(QDialog):
                              or DEFAULTS['api_base_url']),
             'tickets_per_page': self._settings.get(
                 'tickets_per_page', DEFAULTS['tickets_per_page']),
+            'include_beta_updates': self._include_beta_updates_cb.isChecked(),
             'wifi_ssid': wifi_ssid,
             'wifi_password': wifi_password,
             'wifi_auto_connect': bool(wifi_ssid),

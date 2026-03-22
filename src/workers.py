@@ -182,10 +182,14 @@ class UpdateCheckWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
 
+    def __init__(self, include_prereleases=False, parent=None):
+        super().__init__(parent)
+        self.include_prereleases = include_prereleases
+
     def run(self):
         try:
             from updater import check_for_updates
-            self.finished.emit(check_for_updates())
+            self.finished.emit(check_for_updates(include_prereleases=self.include_prereleases))
         except Exception as e:
             logging.error(f"Update check failed: {e}", exc_info=True)
             self.error.emit(str(e))

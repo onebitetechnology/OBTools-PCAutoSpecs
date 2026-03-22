@@ -949,7 +949,10 @@ class MainWindow(QMainWindow):
         if self._startup_update_check_worker is not None:
             return
 
-        self._startup_update_check_worker = UpdateCheckWorker(self)
+        self._startup_update_check_worker = UpdateCheckWorker(
+            include_prereleases=bool(self._settings.get('include_beta_updates', False)),
+            parent=self,
+        )
         self._startup_update_check_worker.finished.connect(
             self._on_startup_update_check_finished)
         self._startup_update_check_worker.error.connect(
