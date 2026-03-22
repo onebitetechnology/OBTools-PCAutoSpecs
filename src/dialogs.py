@@ -1823,10 +1823,27 @@ class SettingsDialog(QDialog):
         wifi_layout.setContentsMargins(16, 12, 16, 12)
         wifi_layout.setSpacing(8)
 
+        wifi_header = QHBoxLayout()
+        wifi_header.setSpacing(8)
+
         wifi_title = QLabel("Auto Connect to WiFi")
         wifi_title.setStyleSheet(
             f"font-weight: bold; color: {COLORS['text_primary']}; border: none;")
-        wifi_layout.addWidget(wifi_title)
+        wifi_header.addWidget(wifi_title)
+        wifi_header.addStretch()
+
+        wifi_prefilled = bool(self._settings.get('wifi_ssid', '').strip())
+        self._wifi_toggle_btn = QPushButton()
+        self._wifi_toggle_btn.setObjectName("secondary")
+        self._wifi_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self._wifi_toggle_btn.clicked.connect(self._toggle_wifi_card)
+        wifi_header.addWidget(self._wifi_toggle_btn)
+        wifi_layout.addLayout(wifi_header)
+
+        self._wifi_body = QWidget()
+        wifi_body_layout = QVBoxLayout(self._wifi_body)
+        wifi_body_layout.setContentsMargins(0, 0, 0, 0)
+        wifi_body_layout.setSpacing(8)
 
         # SSID row
         ssid_row = QHBoxLayout()
@@ -1839,7 +1856,7 @@ class SettingsDialog(QDialog):
         self._wifi_ssid_input.setPlaceholderText("WiFi network name")
         self._wifi_ssid_input.setText(self._settings.get('wifi_ssid', ''))
         ssid_row.addWidget(self._wifi_ssid_input)
-        wifi_layout.addLayout(ssid_row)
+        wifi_body_layout.addLayout(ssid_row)
 
         # Password row
         pass_row = QHBoxLayout()
@@ -1859,30 +1876,54 @@ class SettingsDialog(QDialog):
             lambda checked: self._wifi_pass_input.setEchoMode(
                 QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password))
         pass_row.addWidget(self._show_wifi_cb)
-        wifi_layout.addLayout(pass_row)
+        wifi_body_layout.addLayout(pass_row)
+
+        wifi_help = QLabel("Optional. Leave blank if this shop does not want automatic WiFi connection.")
+        wifi_help.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt; border: none;")
+        wifi_help.setWordWrap(True)
+        wifi_body_layout.addWidget(wifi_help)
+
+        wifi_layout.addWidget(self._wifi_body)
+        self._wifi_collapsed = wifi_prefilled
+        self._sync_wifi_card_toggle()
 
         body_layout.addWidget(wifi_card)
 
         # ── Technicians Card ──────────────────────────────────────
-        # Inline name fields — up to 5 techs, no dialog needed
-        techs_card = QWidget()
-        techs_card.setStyleSheet(
-            f"background-color: {COLORS['card_bg']}; "
-            f"border: 1px solid {COLORS['card_border']}; border-radius: 12px;")
+        techs_card = QFrame()
+        techs_card.setObjectName("card")
         techs_layout = QVBoxLayout(techs_card)
         techs_layout.setContentsMargins(16, 14, 16, 14)
         techs_layout.setSpacing(8)
+
+        techs_header = QHBoxLayout()
+        techs_header.setSpacing(8)
 
         techs_title = QLabel("Technicians")
         techs_title.setStyleSheet(
             f"font-size: 11pt; font-weight: bold; "
             f"color: {COLORS['text_primary']}; border: none;")
-        techs_layout.addWidget(techs_title)
+        techs_header.addWidget(techs_title)
+        techs_header.addStretch()
 
-        techs_hint = QLabel("Add tech names to track who ran each scan (up to 5).")
+        tech_prefilled = bool(get_technicians())
+        self._techs_toggle_btn = QPushButton()
+        self._techs_toggle_btn.setObjectName("secondary")
+        self._techs_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self._techs_toggle_btn.clicked.connect(self._toggle_techs_card)
+        techs_header.addWidget(self._techs_toggle_btn)
+        techs_layout.addLayout(techs_header)
+
+        techs_hint = QLabel("Add tech names to track who ran each scan.")
         techs_hint.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 9pt; border: none;")
         techs_layout.addWidget(techs_hint)
+
+        self._techs_body = QWidget()
+        techs_body_layout = QVBoxLayout(self._techs_body)
+        techs_body_layout.setContentsMargins(0, 0, 0, 0)
+        techs_body_layout.setSpacing(8)
 
         _field_style = (
             f"background-color: {COLORS['console_bg']}; "
@@ -1890,24 +1931,28 @@ class SettingsDialog(QDialog):
             f"border: 1px solid {COLORS['card_border']}; "
             "border-radius: 6px; padding: 5px 10px; font-size: 10pt;"
         )
-        existing_names = [t.get('name', '') for t in get_technicians()]
+        self._tech_field_style = _field_style
+        self._tech_rows_container = QWidget()
+        self._tech_rows_layout = QVBoxLayout(self._tech_rows_container)
+        self._tech_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._tech_rows_layout.setSpacing(6)
         self._tech_name_fields = []
-        for i in range(5):
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            lbl = QLabel(f"{i + 1}.")
-            lbl.setFixedWidth(18)
-            lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; border: none;")
-            row.addWidget(lbl)
-            field = QLineEdit()
-            field.setPlaceholderText(f"Tech {i + 1} name")
-            field.setFixedHeight(32)
-            field.setStyleSheet(_field_style)
-            if i < len(existing_names):
-                field.setText(existing_names[i])
-            row.addWidget(field)
-            self._tech_name_fields.append(field)
-            techs_layout.addLayout(row)
+
+        existing_names = [t.get('name', '') for t in get_technicians() if t.get('name')]
+        for name in existing_names or [""]:
+            self._add_tech_row(name)
+
+        techs_body_layout.addWidget(self._tech_rows_container)
+
+        add_tech_btn = QPushButton("+ Add Technician")
+        add_tech_btn.setObjectName("secondary")
+        add_tech_btn.setCursor(Qt.PointingHandCursor)
+        add_tech_btn.clicked.connect(lambda: self._add_tech_row(""))
+        techs_body_layout.addWidget(add_tech_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        techs_layout.addWidget(self._techs_body)
+        self._techs_collapsed = tech_prefilled
+        self._sync_techs_card_toggle()
 
         body_layout.addWidget(techs_card)
 
@@ -1964,6 +2009,25 @@ class SettingsDialog(QDialog):
         self._update_progress.setRange(0, 100)
         self._update_progress.setValue(0)
         self._update_progress.setTextVisible(True)
+        self._update_progress.setFormat("%p%")
+        self._update_progress.setFixedHeight(22)
+        self._update_progress.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {COLORS['console_bg']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['card_border']};
+                border-radius: 11px;
+                text-align: center;
+                font-size: 10pt;
+                font-weight: bold;
+                padding: 1px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {COLORS['primary']};
+                border-radius: 10px;
+                margin: 1px;
+            }}
+        """)
         self._update_progress.hide()
         updates_layout.addWidget(self._update_progress)
 
@@ -2040,6 +2104,57 @@ class SettingsDialog(QDialog):
     def _toggle_api_card(self):
         self._api_collapsed = not self._api_collapsed
         self._sync_api_card_toggle()
+
+    def _sync_wifi_card_toggle(self):
+        self._wifi_body.setVisible(not self._wifi_collapsed)
+        self._wifi_toggle_btn.setText(
+            "Show Details" if self._wifi_collapsed else "Hide Details"
+        )
+
+    def _toggle_wifi_card(self):
+        self._wifi_collapsed = not self._wifi_collapsed
+        self._sync_wifi_card_toggle()
+
+    def _sync_techs_card_toggle(self):
+        self._techs_body.setVisible(not self._techs_collapsed)
+        self._techs_toggle_btn.setText(
+            "Show Details" if self._techs_collapsed else "Hide Details"
+        )
+
+    def _toggle_techs_card(self):
+        self._techs_collapsed = not self._techs_collapsed
+        self._sync_techs_card_toggle()
+
+    def _add_tech_row(self, name=""):
+        row_widget = QWidget()
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        field = QLineEdit()
+        field.setPlaceholderText("Technician name")
+        field.setFixedHeight(32)
+        field.setStyleSheet(self._tech_field_style)
+        field.setText(name)
+        row.addWidget(field)
+
+        remove_btn = QPushButton("Remove")
+        remove_btn.setObjectName("secondary")
+        remove_btn.setCursor(Qt.PointingHandCursor)
+        row.addWidget(remove_btn)
+
+        self._tech_rows_layout.addWidget(row_widget)
+        self._tech_name_fields.append(field)
+
+        def _remove_row():
+            self._tech_name_fields = [f for f in self._tech_name_fields if f is not field]
+            row_widget.setParent(None)
+            row_widget.deleteLater()
+            if not self._tech_name_fields:
+                self._add_tech_row("")
+
+        remove_btn.clicked.connect(_remove_row)
+        return field
 
     def _test_connection(self):
         self._test_status.setText("Testing...")
