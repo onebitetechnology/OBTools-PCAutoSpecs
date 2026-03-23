@@ -62,6 +62,19 @@ _APP_INSTANCE_LOCK = None
 
 # ─── Logging ──────────────────────────────────────────────────────────
 
+def _get_safe_windows_workdir():
+    """Return a local Windows directory safe for detached helper processes."""
+    candidates = [
+        os.environ.get('SYSTEMROOT'),
+        os.environ.get('WINDIR'),
+        tempfile.gettempdir(),
+        r'C:\Windows',
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isdir(candidate):
+            return candidate
+    return None
+
 def setup_logging():
     """Set up file + console logging. Logs save to a logs/ folder next to the exe on the USB."""
     log_dir = Path(get_app_dir()) / 'logs'
@@ -483,7 +496,8 @@ class MainWindow(QMainWindow):
             result = subprocess.run(
                 ['powershell', '-NoProfile', '-Command', ps_check],
                 capture_output=True, text=True, timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                cwd=_get_safe_windows_workdir()
             )
             drive_type = result.stdout.strip()
             if drive_type != '2':
@@ -499,7 +513,8 @@ class MainWindow(QMainWindow):
             subprocess.run(
                 ['powershell', '-NoProfile', '-Command', ps_eject],
                 capture_output=True, text=True, timeout=8,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                cwd=_get_safe_windows_workdir()
             )
             logging.info(f"USB eject command issued for drive {drive}")
 
@@ -1149,7 +1164,8 @@ class MainWindow(QMainWindow):
             result = subprocess.run(
                 ['powershell', '-NoProfile', '-Command', ps_check],
                 capture_output=True, text=True, timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                cwd=_get_safe_windows_workdir()
             )
             drive_info = json.loads(result.stdout.strip()) if result.stdout.strip() else {}
             drive_type = str(drive_info.get('DriveType', '')).strip()
@@ -1189,7 +1205,7 @@ class MainWindow(QMainWindow):
 
             if box.exec() == QMessageBox.Yes.value:
                 ps_eject = f"""
-                Start-Sleep -Seconds 2
+                Start-Sleep -Seconds 5
                 $shell = New-Object -ComObject Shell.Application
                 $d = $shell.Namespace('{drive}\\')
                 if ($d) {{ $d.Self.InvokeVerb('Eject') }}
@@ -1203,7 +1219,8 @@ class MainWindow(QMainWindow):
                     ['powershell', '-NoProfile', '-Command', ps_eject],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    creationflags=creationflags
+                    creationflags=creationflags,
+                    cwd=_get_safe_windows_workdir()
                 )
                 logging.info(f"USB eject scheduled for {drive} after app exit")
             else:

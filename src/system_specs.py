@@ -51,6 +51,66 @@ if not os.path.isfile(_POWERSHELL_EXE):
     _POWERSHELL_EXE = 'powershell.exe'  # fallback to PATH
 
 
+def _resolve_bundled_smartctl_path():
+    """Find smartctl.exe in source or bundled layouts."""
+    source_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = []
+
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        meipass = os.path.abspath(sys._MEIPASS)
+        candidates.extend([
+            os.path.join(meipass, 'smartctl.exe'),
+            os.path.join(meipass, 'src', 'smartctl.exe'),
+        ])
+
+    candidates.extend([
+        os.path.join(source_dir, 'smartctl.exe'),
+        os.path.join(os.path.dirname(source_dir), 'src', 'smartctl.exe'),
+    ])
+
+    seen = set()
+    for candidate in candidates:
+        normalized = os.path.normpath(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if os.path.isfile(normalized):
+            return normalized
+    return candidates[0] if candidates else 'smartctl.exe'
+
+
+def _normalize_ram_slot_label(device_locator, bank_label, slot_index, used_labels):
+    """Prefer the WMI slot label, but guarantee a unique readable slot name."""
+    def _clean(value):
+        if value is None:
+            return ""
+        text = str(value).strip()
+        return "" if not text or text.lower() == "unknown" else text
+
+    device_locator = _clean(device_locator)
+    bank_label = _clean(bank_label)
+    fallback = f"DIMM{slot_index + 1}"
+
+    for candidate in (device_locator, bank_label, fallback):
+        if candidate and candidate not in used_labels:
+            used_labels.add(candidate)
+            return candidate
+
+    if device_locator and bank_label:
+        combined = f"{device_locator} ({bank_label})"
+        if combined not in used_labels:
+            used_labels.add(combined)
+            return combined
+
+    suffix = 2
+    while True:
+        candidate = f"{fallback}-{suffix}"
+        if candidate not in used_labels:
+            used_labels.add(candidate)
+            return candidate
+        suffix += 1
+
+
 def _get_event_log_summary():
     """Get Windows Event Log summary (7 days) - Critical and Error events only"""
     try:
@@ -1655,6 +1715,7 @@ def _get_ram_info(com_wmi):
                     }
                     ram_type = ram_type_map.get(ram_type_code, "")
                     module_count = items.Count
+                    used_slot_labels = set()
                     
                     # Build summary line
                     if ram_type and ram_speed:
@@ -1666,7 +1727,12 @@ def _get_ram_info(com_wmi):
                     for i in range(items.Count):
                         module = items.ItemIndex(i)
                         try:
-                            slot = module.Properties_("DeviceLocator").Value or f"DIMM{i+1}"
+                            slot = _normalize_ram_slot_label(
+                                module.Properties_("DeviceLocator").Value,
+                                module.Properties_("BankLabel").Value,
+                                i,
+                                used_slot_labels,
+                            )
                             capacity_bytes = module.Properties_("Capacity").Value
                             capacity_gb = round(int(capacity_bytes) / (1024**3), 0) if capacity_bytes else 0
                             speed = module.Properties_("ConfiguredClockSpeed").Value or module.Properties_("Speed").Value or 0
@@ -1889,6 +1955,7 @@ def _get_ram_details(com_wmi):
             26: "DDR4",
             34: "DDR5"
         }
+        used_slot_labels = set()
         
         # Form factor map (key for determining if RAM is removable)
         form_factor_map = {
@@ -1906,6 +1973,12 @@ def _get_ram_details(com_wmi):
                 # Slot location
                 device_locator = module.Properties_("DeviceLocator").Value or "Unknown"
                 bank_label = module.Properties_("BankLabel").Value or ""
+                slot_label = _normalize_ram_slot_label(
+                    device_locator,
+                    bank_label,
+                    i,
+                    used_slot_labels,
+                )
                 
                 # Size
                 capacity_bytes = module.Properties_("Capacity").Value
@@ -1939,7 +2012,7 @@ def _get_ram_details(com_wmi):
                 
                 # Build module info
                 module_info = {
-                    'slot': device_locator,
+                    'slot': slot_label,
                     'bank': bank_label,
                     'size_gb': int(capacity_gb),
                     'type': ram_type,
@@ -4347,14 +4420,11 @@ def _get_disk_smart_structured(disk_index):
         return None
 
     try:
-        # Simple smartctl approach - most accurate and no admin required
-        # Check if running from PyInstaller bundle
-        if hasattr(sys, '_MEIPASS'):
-            # Running from PyInstaller bundle - smartctl.exe is in the temp directory
-            smartctl_path = os.path.join(sys._MEIPASS, "smartctl.exe")
-        else:
-            # Running from source - smartctl.exe is in src directory
-            smartctl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "smartctl.exe")
+        # Simple smartctl approach - most accurate and no admin required.
+        # In bundled builds the binary may live at _MEIPASS/src/smartctl.exe
+        # because the whole src tree is shipped as data.
+        smartctl_path = _resolve_bundled_smartctl_path()
+        logging.debug(f"Using smartctl path for disk {disk_index}: {smartctl_path}")
 
         ps_script = '''
         try {
