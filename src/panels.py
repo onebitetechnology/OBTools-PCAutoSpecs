@@ -575,8 +575,10 @@ class SystemInfoPanel(QWidget):
 
         sec.set_row_value('ram', ram_value)
 
-        for module in specs.get('RAMDetails', []):
-            slot = module.get('slot', 'Unknown')
+        ram_details = specs.get('RAMDetails', [])
+        slot_labels = self._build_ram_slot_labels(ram_details)
+
+        for module, slot in zip(ram_details, slot_labels):
             size = int(module.get('size_gb', 0))
             speed = module.get('configured_speed', 0)
             mfr = module.get('manufacturer', 'Unknown')
@@ -598,6 +600,30 @@ class SystemInfoPanel(QWidget):
                 sec.add_info_row(label, value, color=color)
             elif message:
                 sec.add_detail_row(message, color=color)
+
+    @staticmethod
+    def _build_ram_slot_labels(ram_details):
+        """Guarantee unique, human-friendly RAM slot labels for display."""
+        labels = []
+        used_labels = set()
+
+        for index, module in enumerate(ram_details):
+            raw_label = str(module.get('slot') or '').strip()
+            if not raw_label or raw_label.lower() == 'unknown':
+                raw_label = f"DIMM {chr(65 + index)}"
+
+            label = raw_label
+            if label in used_labels:
+                label = f"DIMM {chr(65 + index)}"
+                suffix = 2
+                while label in used_labels:
+                    label = f"DIMM {chr(65 + index)}-{suffix}"
+                    suffix += 1
+
+            used_labels.add(label)
+            labels.append(label)
+
+        return labels
 
     def _update_gpu(self, specs):
         sec = self._sec_gpu

@@ -174,6 +174,30 @@ class ReportFormatter:
 
         return '<br>'.join(styled)
 
+    @staticmethod
+    def _build_ram_slot_labels(ram_details):
+        """Guarantee unique RAM slot labels in the HTML report."""
+        labels = []
+        used_labels = set()
+
+        for index, module in enumerate(ram_details):
+            raw_label = str(module.get('slot') or '').strip()
+            if not raw_label or raw_label.lower() == 'unknown':
+                raw_label = f"DIMM {chr(65 + index)}"
+
+            label = raw_label
+            if label in used_labels:
+                label = f"DIMM {chr(65 + index)}"
+                suffix = 2
+                while label in used_labels:
+                    label = f"DIMM {chr(65 + index)}-{suffix}"
+                    suffix += 1
+
+            used_labels.add(label)
+            labels.append(label)
+
+        return labels
+
     def _get_report_meta_lines(self, specs, upload_title):
         """Shared header lines for both overview and full uploads."""
         lines = []
@@ -802,8 +826,8 @@ class ReportFormatter:
             # Add individual module details
             if ram_details:
                 lines.append("<strong>Slot Population:</strong>")
-                for module in ram_details:
-                    slot = module.get('slot', 'Unknown')
+                slot_labels = self._build_ram_slot_labels(ram_details)
+                for module, slot in zip(ram_details, slot_labels):
                     cap = module.get('size_gb', 0)
                     speed = module.get('configured_speed', module.get('speed', 0))
                     manufacturer = module.get('manufacturer', 'Unknown')
