@@ -44,47 +44,33 @@ class ReportFormatter:
         if upload_mode == 'overview':
             sections = [self._format_overview_only_note(specs)]
         else:
-            sections = []
+            sections = [self._format_system_overview_section(specs)]
 
-            # Header (no separator before it)
-            sections.append(self._format_header(specs))
-
-            # Critical Issues (only if there are any)
             critical = self._format_critical_issues(specs)
             if critical:
                 sections.append(critical)
 
-            # Hardware
-            sections.append(self._format_hardware_config(specs))
+            sections.append(self._format_cpu_section(specs))
+            sections.append(self._format_ram_section(specs))
+            sections.append(self._format_gpu_section(specs))
+            sections.append(self._format_motherboard_bios_section(specs))
 
-            # Network (may return empty)
-            network = self._format_network_hardware(specs)
-            if network:
-                sections.append(network)
-
-            # Display (may return empty)
-            display = self._format_display_config(specs)
-            if display:
-                sections.append(display)
-
-            # Battery (laptops only)
             battery = self._format_battery_config(specs)
-            if battery:
-                sections.append(battery)
 
-            # Storage Health
             storage = self._format_storage_health_comprehensive(specs)
+
+            network = self._format_network_hardware(specs)
+            monitors = self._format_display_config(specs)
+
+            health = self._format_advanced_health(specs)
             if storage:
                 sections.append(storage)
-
-            # System Status
-            sections.append(self._format_system_status(specs))
-
-            # Drivers
-            sections.append(self._format_driver_status(specs))
-
-            # System Health
-            health = self._format_advanced_health(specs)
+            if network:
+                sections.append(network)
+            if monitors:
+                sections.append(monitors)
+            if battery:
+                sections.append(battery)
             if health:
                 sections.append(health)
 
@@ -94,15 +80,16 @@ class ReportFormatter:
         # decoded to emoji by every HTML renderer (including RepairDesk's note viewer)
         SECTION_EMOJI = {
             'System Overview':          '&#x1F5A5;',  # 🖥  desktop computer
-            'CRITICAL ISSUES':          '&#x1F6A8;',  # 🚨  rotating light
-            'Hardware Configuration':   '&#x2699;',   # ⚙   gear
-            'Network':                  '&#x1F310;',  # 🌐  globe
-            'Display':                  '&#x1F4FA;',  # 📺  TV/display
+            'Critical Issues':          '&#x1F6A8;',  # 🚨  rotating light
+            'CPU':                      '&#x2699;',   # ⚙
+            'RAM':                      '&#x1F9E0;',  # 🧠
+            'GPU':                      '&#x1F3AE;',  # 🎮
+            'Motherboard & BIOS':       '&#x1F4BB;',  # 💻
+            'Storage':                  '&#x1F4BE;',  # 💾
+            'Network & Peripherals':    '&#x1F310;',  # 🌐
+            'Monitors':                 '&#x1F4FA;',  # 📺
             'Battery':                  '&#x1F50B;',  # 🔋  battery
-            'Storage Health':           '&#x1F4BE;',  # 💾  floppy disk
-            'System Status':            '&#x1F4CA;',  # 📊  bar chart
-            'Drivers':                  '&#x1F527;',  # 🔧  wrench
-            'System Health':            '&#x1FA7A;',  # 🩺  stethoscope
+            'Advanced Diagnostics':     '&#x1FA7A;',  # 🩺
         }
 
         def _style_line(line, is_first_section=False):
@@ -121,38 +108,33 @@ class ReportFormatter:
             if title not in SECTION_EMOJI:
                 return line
             emoji = SECTION_EMOJI[title]
-            rule = "" if is_first_section else (
-                f"<hr style='border:none;border-top:2px solid #2563EB;"
-                f"margin:10px 0 6px 0;'>"
-            )
             return (
-                f"{rule}"
-                f"<strong style='font-size:12pt;color:#1E3A5F;'>"
+                (
+                    "" if is_first_section else
+                    "<div style='margin:6px 0 2px 0;padding-top:4px;"
+                    "border-top:1px solid #CBD5E1;'></div>"
+                )
+                + f"<strong style='font-size:10.5pt;color:#1E3A5F;'>"
                 f"{emoji}&nbsp;&nbsp;{title}</strong>"
             )
 
         output_lines = []
-        for i, section in enumerate(sections):
+        for section in sections:
             if not section:
                 continue
-            while section and section[-1] == '':
-                section.pop()
-            output_lines.extend(section)
-            output_lines.append('')
-
-        # Collapse consecutive blank lines
-        collapsed = []
-        for line in output_lines:
-            if line == '' and collapsed and collapsed[-1] == '':
-                continue
-            collapsed.append(line)
+            output_lines.extend(line for line in section if line)
 
         # Apply section header styling
         styled = []
         first_section_seen = False
-        for line in collapsed:
+        for line in output_lines:
             stripped = line.strip()
             is_section = bool(re.fullmatch(r'<strong>([^<]+)</strong>', stripped))
+            if line.startswith("  - "):
+                line = f"&nbsp;&nbsp;&bull; {line[4:]}"
+            elif line.startswith("    • "):
+                line = f"&nbsp;&nbsp;&nbsp;&nbsp;&bull; {line[6:]}"
+
             styled.append(_style_line(line, is_first_section=is_section and not first_section_seen))
             if is_section:
                 title = re.fullmatch(r'<strong>([^<]+)</strong>', stripped).group(1)
@@ -165,14 +147,18 @@ class ReportFormatter:
             from settings import SCAN_CATEGORIES
             skip_labels = [label for key, label in SCAN_CATEGORIES if key in skip_cats]
             if skip_labels:
-                styled.append('')
                 styled.append(
                     f"<em style='color:#888;font-size:9pt;'>"
                     f"Tests not performed in this report: {', '.join(skip_labels)}"
                     f"</em>"
                 )
 
-        return '<br>'.join(styled)
+        return (
+            "<div style='font-family:Segoe UI, Arial, sans-serif;"
+            "font-size:10pt;line-height:1.28;color:#1F2937;'>"
+            + "<br>".join(styled) +
+            "</div>"
+        )
 
     @staticmethod
     def _build_ram_slot_labels(ram_details):
@@ -203,7 +189,7 @@ class ReportFormatter:
         lines = []
 
         if upload_title:
-            lines.append(f"<strong style='font-size:12pt;'>{upload_title}</strong>")
+            lines.append(f"<strong style='font-size:11pt;'>{upload_title}</strong>")
 
         tech_name = specs.get('_job_tech_name', '')
         if tech_name:
@@ -366,26 +352,24 @@ class ReportFormatter:
     # RepairDesk note sections
     # ────────────────────────────────────────────────────────────────────
 
-    def _format_header(self, specs):
-        """Format header section — report type first (large bold), then tech name, then system overview"""
+    def _format_system_overview_section(self, specs):
+        """Format the top system overview section to mirror the UI summary card."""
         lines = self._get_report_meta_lines(specs, "Full Diagnostic Results")
-        skip_cats = specs.get('_job_skip_cats', set())
-
-        import platform
-        computer_name = platform.node() if hasattr(platform, 'node') else specs.get('ComputerName', 'Unknown')
 
         lines.append("<strong>System Overview</strong>")
 
-        # System Type
         system_type = specs.get('SystemType', 'Unknown')
         lines.append(f"<strong>System Type:</strong> {system_type}")
 
-        # Model (Laptop model or Desktop type)
         laptop_model = specs.get('LaptopModel', 'Not Available')
+        screen_size = specs.get('ScreenSize')
         desktop_type = specs.get('DesktopType', '')
 
         if laptop_model and laptop_model != 'Not Available':
-            lines.append(f"<strong>Model:</strong> {laptop_model}")
+            model_text = laptop_model
+            if screen_size:
+                model_text += f" ({screen_size})"
+            lines.append(f"<strong>Model:</strong> {model_text}")
         elif desktop_type and desktop_type != 'None':
             lines.append(f"<strong>Model:</strong> {desktop_type}")
         else:
@@ -394,83 +378,46 @@ class ReportFormatter:
             else:
                 lines.append(f"<strong>Model:</strong> Not detected")
 
-        # Computer Name
-        lines.append(f"<strong>Computer Name:</strong> {computer_name}")
+        hp_specific = specs.get('HPSpecific', {})
+        if hp_specific:
+            family = hp_specific.get('system_family', '').strip()
+            if family:
+                lines.append(f"<strong>Product Family:</strong> {family}")
+            sku = hp_specific.get('system_sku', '').strip()
+            if sku and not re.match(r'^[0\s]+$', sku):
+                lines.append(f"<strong>Product SKU:</strong> {sku}")
 
-        # Serial Number
         serial = specs.get('SerialNumber', '')
         if serial and serial != 'N/A':
             lines.append(f"<strong>Serial Number:</strong> {serial}")
+        else:
+            lines.append("<strong>Serial Number:</strong> Not detected")
 
-        # Motherboard
-        motherboard = specs.get('Motherboard', 'Unknown')
-        if 'motherboard' not in skip_cats and motherboard and motherboard not in ('Unknown', 'Test skipped'):
-            lines.append(f"<strong>Motherboard:</strong> {motherboard}")
+        windows_details = specs.get('WindowsDetails', 'Unknown')
+        if isinstance(windows_details, str) and windows_details not in (
+                'Unknown', 'Windows details unavailable'):
+            details_dict = {}
+            os_name = 'Windows'
+            for part in windows_details.split(', '):
+                if ':' in part:
+                    k, v = part.split(':', 1)
+                    details_dict[k.strip()] = v.strip()
+                    if k.strip() == 'Edition':
+                        os_name = v.strip()
+            lines.append(f"<strong>Windows:</strong> {os_name}")
+            for key in ('Version', 'Build', 'Installed', 'Last Boot'):
+                if key in details_dict:
+                    lines.append(f"<strong>{key}:</strong> {details_dict[key]}")
+        else:
+            lines.append(f"<strong>Windows:</strong> {windows_details or 'Unknown'}")
 
-        # Chipset
-        chipset = specs.get('Chipset', '')
-        if 'motherboard' not in skip_cats and chipset:
-            lines.append(f"<strong>Chipset:</strong> {chipset}")
-
-        # Max RAM (from motherboard database)
-        mobo_specs = specs.get('MotherboardSpecs')
-        if 'motherboard' not in skip_cats and mobo_specs:
-            max_ram = f"{mobo_specs.get('max_ram', 'Unknown')} ({mobo_specs.get('max_per_dimm', '?')} per slot x {mobo_specs.get('dimm_slots', '?')} slots)"
-            lines.append(f"<strong>Max RAM Supported:</strong> {max_ram}")
-
-        # BIOS + Age Estimate
-        bios = specs.get('BIOS', 'Unknown')
-        bios_details = specs.get('BIOSDetails', [])  # list of extra lines: Version, Date, SMBIOS
-        if 'motherboard' not in skip_cats and bios and bios not in ('Unknown', 'Test skipped'):
-            # Assemble full BIOS string: first line + version + date from details
-            bios_mfr = re.sub(r'^Manufacturer:\s*', '', bios)
-            bios_version = next((re.sub(r'^Version:\s*', '', d) for d in bios_details if d.startswith('Version:')), None)
-            bios_date    = next((re.sub(r'^Date:\s*', '', d)    for d in bios_details if d.startswith('Date:')), None)
-
-            bios_parts = [f"<strong>BIOS:</strong> {bios_mfr}"]
-            if bios_version:
-                bios_parts.append(f"<strong>Version:</strong> {bios_version}")
-            if bios_date:
-                bios_parts.append(f"<strong>Date:</strong> {bios_date}")
-            lines.append("  ·  ".join(bios_parts))
-
-            # Estimate device age from BIOS date
-            bios_for_age = bios_date or bios
-            date_match = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', bios_for_age)
-            if not date_match:
-                date_match = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', bios_for_age)
-            if date_match:
-                try:
-                    groups = date_match.groups()
-                    if len(groups[0]) == 4:
-                        bios_year = int(groups[0])
-                    else:
-                        bios_year = int(groups[2])
-                    age_years = datetime.now().year - bios_year
-                    if age_years >= 0:
-                        lines.append(f"<strong>Estimated Age:</strong> ~{age_years} year{'s' if age_years != 1 else ''}")
-                except Exception:
-                    pass
-
-        # Scan history (previous visit)
-        serial = specs.get('SerialNumber', '')
-        if serial and serial != 'N/A':
-            import json
-            try:
-                if self.scan_history_path and self.scan_history_path.exists():
-                    with open(self.scan_history_path, 'r') as f:
-                        history = json.load(f)
-                    if serial in history:
-                        entry = history[serial]
-                        last_date = entry.get('last_scanned', '')
-                        last_ticket = entry.get('ticket_id', '')
-                        scan_count = entry.get('scan_count', 0)
-                        if last_date and last_ticket:
-                            lines.append(f"<strong>Previous Visit:</strong> {last_date} ({last_ticket}) — scan #{scan_count}")
-            except Exception:
-                pass
-
-        lines.append("")
+        system_health = specs.get('SystemHealth', 'Unknown')
+        if isinstance(system_health, list) and system_health:
+            lines.append(f"<strong>Runtime Health:</strong> {system_health[0]}")
+            for metric in system_health[1:]:
+                lines.append(metric)
+        elif system_health:
+            lines.append(f"<strong>Runtime Health:</strong> {system_health}")
 
         return lines
 
@@ -694,10 +641,223 @@ class ReportFormatter:
                 issues.append("WiFi: Adapter present but not connected")
 
         if issues:
-            lines.append("<strong>CRITICAL ISSUES</strong>")
+            lines.append("<strong>Critical Issues</strong>")
             for issue in issues:
                 lines.append(f"- {issue}")
-            lines.append("")
+
+        return lines
+
+    def _format_cpu_section(self, specs):
+        """Format CPU section to match the UI CPU card."""
+        lines = ["<strong>CPU</strong>"]
+
+        cpu_raw = specs.get('CPU', 'Unknown CPU')
+        cpu_details = specs.get('CPUDetails', {})
+
+        if cpu_raw == 'Test skipped':
+            lines.append("<strong>Processor:</strong> Test skipped")
+            return lines
+
+        cpu_model = cpu_raw.split(' | ')[0] if ' | ' in cpu_raw else cpu_raw
+        cpu_model = cpu_model.replace('Intel(R)', 'Intel').replace('(TM)', '').replace('(R)', '')
+        cpu_model = cpu_model.replace('CPU @', '').strip()
+        lines.append(f"<strong>Processor:</strong> {cpu_model}")
+
+        parts = []
+        base_match = re.search(r'Base:\s*([\d.]+)\s*GHz', cpu_raw)
+        boost_match = re.search(r'(?:Boost|Turbo):\s*([\d.]+)\s*GHz', cpu_raw)
+        if base_match:
+            parts.append(f"{base_match.group(1)} GHz")
+        if boost_match:
+            parts.append(f"{boost_match.group(1)} GHz")
+        if parts:
+            lines.append(f"<strong>Base / Boost Clock:</strong> {' / '.join(parts)}")
+
+        ct = re.search(r'\((\d+)C/(\d+)T\)', cpu_raw)
+        if ct:
+            lines.append(f"<strong>Cores / Threads:</strong> {ct.group(1)} / {ct.group(2)}")
+
+        if cpu_details.get('generation'):
+            gen_text = cpu_details['generation']
+            if cpu_details.get('year'):
+                gen_text += f" ({cpu_details['year']})"
+            lines.append(f"<strong>Generation:</strong> {gen_text}")
+        if cpu_details.get('socket'):
+            lines.append(f"<strong>Socket:</strong> {cpu_details['socket']}")
+        if cpu_details.get('tdp'):
+            lines.append(f"<strong>TDP:</strong> {cpu_details['tdp']}W")
+
+        advanced = specs.get('AdvancedHealth', {})
+        temps = advanced.get('temperatures', {})
+        if temps.get('status') == 'ok' and temps.get('cpu_temp_c'):
+            t = temps['cpu_temp_c']
+            sensor = temps.get('cpu_sensor')
+            t_label = '(Hot)' if t >= 80 else '(Warm)' if t >= 60 else '(Normal)'
+            sensor_suffix = f" — {sensor}" if sensor else ""
+            lines.append(f"<strong>Temp — Idle:</strong> {t:.0f}°C {t_label}{sensor_suffix}")
+
+        load = advanced.get('cpu_load_temp', {})
+        if load.get('status') == 'cancelled':
+            lines.append("<strong>Temp — Load:</strong> Cancelled by tech")
+        elif load.get('status') == 'ok' and load.get('peak_temp_c'):
+            peak = load['peak_temp_c']
+            aborted = load.get('aborted', False)
+            sensor = load.get('sensor')
+            p_label = '(Hot)' if peak >= 90 else '(Warm)' if peak >= 75 else '(Normal)'
+            suffix = ' — thermal limit hit!' if aborted else ''
+            if load.get('throttling_detected'):
+                suffix += ' — throttling detected'
+            if sensor:
+                suffix += f" — {sensor}"
+            lines.append(f"<strong>Temp — Load:</strong> {peak:.0f}°C {p_label}{suffix}")
+
+        if cpu_details.get('windows_compatibility'):
+            lines.append(f"<strong>Windows Compat:</strong> {cpu_details['windows_compatibility']}")
+        if cpu_details.get('upgrade_path'):
+            lines.append(f"<strong>Upgrade Options:</strong> {', '.join(cpu_details['upgrade_path'][:3])}")
+
+        return lines
+
+    def _format_ram_section(self, specs):
+        """Format RAM section to match the UI RAM card."""
+        lines = ["<strong>RAM</strong>"]
+
+        ram_raw = specs.get('RAM', 'Unknown')
+        ram_details = specs.get('RAMDetails', [])
+
+        if ram_raw == 'Test skipped':
+            lines.append("<strong>Memory:</strong> Test skipped")
+            return lines
+
+        lines.append(f"<strong>Memory:</strong> {ram_raw}")
+
+        if ram_details:
+            slot_labels = self._build_ram_slot_labels(ram_details)
+            for module, slot in zip(ram_details, slot_labels):
+                cap = module.get('size_gb', 0)
+                speed = module.get('configured_speed', module.get('speed', 0))
+                manufacturer = module.get('manufacturer', 'Unknown')
+                part_number = module.get('part_number', '')
+                value = f"{cap}GB @ {speed}MHz - {manufacturer}"
+                if part_number and part_number != manufacturer:
+                    value += f" {part_number}"
+                lines.append(f"<strong>{slot}:</strong> {value}")
+
+        for obs in specs.get('RAMCompatibilityWarnings', []):
+            label = obs.get('label', '').rstrip(':')
+            value = obs.get('value', '')
+            message = obs.get('message', '')
+            if label and value:
+                lines.append(f"<strong>{label}:</strong> {value}")
+            elif message:
+                lines.append(message)
+
+        return lines
+
+    def _format_gpu_section(self, specs):
+        """Format GPU section to match the UI GPU card."""
+        lines = ["<strong>GPU</strong>"]
+
+        gpu_raw = specs.get('GPU', 'Unknown')
+        gpu_details = specs.get('GPUDetails', {})
+
+        if gpu_raw == 'Test skipped':
+            lines.append("<strong>Graphics:</strong> Test skipped")
+            return lines
+
+        gpu_parts = gpu_raw.split(' - Driver:')
+        if len(gpu_parts) == 1:
+            gpu_parts = gpu_raw.split(' | Driver:')
+        gpu_model = gpu_parts[0].strip(' |')
+
+        vram = None
+        vram_match = re.search(r'\(([\d.]+)\s*GB\s+VRAM\)', gpu_model)
+        if vram_match:
+            vram = vram_match.group(1)
+            gpu_model = gpu_model.replace(vram_match.group(0), '').strip()
+        if not vram:
+            vram_pipe = re.search(r'\|\s*([\d.]+)\s*GB\s+\w+', gpu_model)
+            if vram_pipe:
+                vram = vram_pipe.group(1)
+                gpu_model = re.sub(r'\s*\|\s*[\d.]+\s*GB\s+\w+', '', gpu_model).strip()
+        if not vram and gpu_details.get('vram'):
+            vram_from_details = re.search(r'([\d.]+)', str(gpu_details['vram']))
+            if vram_from_details:
+                vram = vram_from_details.group(1)
+
+        lines.append(f"<strong>Graphics:</strong> {gpu_model}")
+        if vram:
+            lines.append(f"<strong>VRAM:</strong> {vram} GB")
+
+        driver_ver = gpu_details.get('driver_version', '')
+        driver_date = gpu_details.get('driver_date', '')
+        if driver_ver:
+            driver_text = driver_ver + (f" ({driver_date})" if driver_date else "")
+            lines.append(f"<strong>Driver Version:</strong> {driver_text}")
+        elif len(gpu_parts) > 1:
+            lines.append(f"<strong>Driver Version:</strong> {gpu_parts[1].strip()}")
+
+        gpu_metrics = specs.get('GPUMetrics', {})
+        if gpu_metrics.get('temperature') is not None:
+            temp_text = f"{gpu_metrics['temperature']}°C"
+            if gpu_metrics.get('temperature_sensor'):
+                temp_text += f" — {gpu_metrics['temperature_sensor']}"
+            lines.append(f"<strong>Temperature:</strong> {temp_text}")
+        if gpu_metrics.get('core_clock'):
+            lines.append(f"<strong>Core Clock:</strong> {gpu_metrics['core_clock']} MHz")
+        if gpu_metrics.get('memory_clock'):
+            lines.append(f"<strong>Memory Clock:</strong> {gpu_metrics['memory_clock']} MHz")
+        if gpu_metrics.get('power_draw'):
+            lines.append(f"<strong>Power Draw:</strong> {gpu_metrics['power_draw']:.1f} W")
+        if gpu_metrics.get('utilization') is not None:
+            lines.append(f"<strong>GPU Load:</strong> {gpu_metrics['utilization']}%")
+
+        advanced = specs.get('AdvancedHealth', {})
+        gpu_load = advanced.get('gpu_load_temp', {})
+        if gpu_load.get('status') == 'ok' and gpu_load.get('peak_temp_c'):
+            gpu_peak = gpu_load['peak_temp_c']
+            gpu_sensor = gpu_load.get('sensor')
+            gpu_suffix = ''
+            if gpu_load.get('aborted'):
+                gpu_suffix += ' — thermal limit hit!'
+            if gpu_sensor:
+                gpu_suffix += f" — {gpu_sensor}"
+            lines.append(f"<strong>Temp — Load:</strong> {gpu_peak:.0f}°C{gpu_suffix}")
+
+        return lines
+
+    def _format_motherboard_bios_section(self, specs):
+        """Format motherboard and BIOS section to match the UI card."""
+        lines = ["<strong>Motherboard & BIOS</strong>"]
+
+        motherboard = specs.get('Motherboard', 'Unknown')
+        bios = specs.get('BIOS', 'Unknown')
+        skip_cats = specs.get('_job_skip_cats', set())
+
+        if 'motherboard' in skip_cats or motherboard == 'Test skipped' or bios == 'Test skipped':
+            lines.append("<strong>Status:</strong> Test skipped")
+            return lines
+
+        lines.append(f"<strong>Motherboard:</strong> {motherboard}")
+
+        chipset = specs.get('Chipset', '')
+        if chipset:
+            lines.append(f"<strong>Chipset:</strong> {chipset}")
+
+        mobo_specs = specs.get('MotherboardSpecs')
+        if mobo_specs:
+            max_ram = (
+                f"{mobo_specs['max_ram']} ({mobo_specs['max_per_dimm']} per slot × "
+                f"{mobo_specs['dimm_slots']} slots)"
+            )
+            lines.append(f"<strong>Max RAM:</strong> {max_ram}")
+            lines.append(f"<strong>Speeds:</strong> {mobo_specs['supported_speeds']}")
+
+        lines.append(f"<strong>BIOS:</strong> {bios}")
+        for detail_line in specs.get('BIOSDetails', []):
+            if ':' in detail_line:
+                key, value = detail_line.split(':', 1)
+                lines.append(f"<strong>{key.strip()}:</strong> {value.strip()}")
 
         return lines
 
@@ -934,7 +1094,7 @@ class ReportFormatter:
     def _format_storage_health_comprehensive(self, specs):
         """Format comprehensive storage health for ALL drives - matches Activity Log counts"""
         lines = []
-        lines.append("<strong>Storage Health</strong>")
+        lines.append("<strong>Storage</strong>")
         skip_cats = specs.get('_job_skip_cats', set())
 
         if 'storage' in skip_cats or specs.get('Storage') == 'Test skipped':
@@ -986,7 +1146,7 @@ class ReportFormatter:
         lines.append("")
 
         # Detail each drive (skip USB/external)
-        drive_num = 0
+        drive_num = 1
         for drive in storage_health:
             if drive.get('status') == 'N/A':
                 continue  # Skip USB/external drives
@@ -1116,86 +1276,86 @@ class ReportFormatter:
                 speed_cat = 'HDD/Slow'
             lines.append(f"<strong>Disk Speed (C:):</strong> {read_speed:.0f} MB/s read, {write_speed:.0f} MB/s write ({speed_cat})")
 
-        lines.append("")
         return lines
 
     def _format_network_hardware(self, specs):
-        """Format network hardware section — only emits if adapters are found"""
+        """Format network/peripheral details to mirror the UI section."""
         content = []
         skip_cats = specs.get('_job_skip_cats', set())
 
         network = specs.get('Network', '')
-        network_drivers = specs.get('NetworkDrivers', [])
-
         if 'network' in skip_cats or network == 'Test skipped':
-            return ["<strong>Network</strong>", "<strong>Status:</strong> Test skipped"]
+            return ["<strong>Network & Peripherals</strong>", "<strong>Status:</strong> Test skipped"]
 
         if network:
-            # Network is stored as a newline-separated string, split it
             if isinstance(network, str):
                 network_adapters = [adapter.strip() for adapter in network.split('\n') if adapter.strip()]
             else:
                 network_adapters = network
 
             for adapter in network_adapters:
-                # Parse adapter string
-                # Example: "Intel(R) Dual Band Wireless-AC 7260 - MAC: A4:C4:94:73:9E:BB"
-
-                # Strip MAC address if present
-                if ' - MAC:' in adapter:
-                    adapter_name = adapter.split(' - MAC:')[0].strip()
-                else:
-                    adapter_name = adapter.strip()
-
+                parts = adapter.split(' - MAC: ')
+                adapter_name = parts[0].strip()
+                mac_and_rest = parts[1].strip() if len(parts) > 1 else None
                 if not adapter_name:
                     continue
 
-                # Determine adapter type
-                if 'Wireless' in adapter_name or 'Wi-Fi' in adapter_name:
-                    content.append(f"<strong>Wireless:</strong> {adapter_name}")
-                elif 'Ethernet' in adapter_name:
-                    content.append(f"<strong>Ethernet:</strong> {adapter_name}")
-                elif 'Bluetooth' in adapter_name:
-                    content.append(f"<strong>Bluetooth:</strong> {adapter_name}")
-                else:
-                    content.append(f"<strong>Network Adapter:</strong> {adapter_name}")
+                content.append(f"<strong>Adapter:</strong> {adapter_name}")
 
-        # WiFi diagnostics — belongs in network section
+                if mac_and_rest:
+                    driver_info = None
+                    if ' | Driver: ' in mac_and_rest:
+                        mac_and_speed, driver_info = mac_and_rest.split(' | Driver: ', 1)
+                    else:
+                        mac_and_speed = mac_and_rest
+
+                    mac_address = mac_and_speed
+                    speed_info = None
+                    if '(' in mac_and_speed:
+                        mac_address = mac_and_speed.split('(')[0].strip()
+                        speed_info = mac_and_speed.split('(')[1].rstrip(')')
+
+                    if mac_address:
+                        content.append(f"  - MAC Address: {mac_address}")
+                    if speed_info:
+                        content.append(f"  - Link Speed: {speed_info}")
+                    if driver_info:
+                        content.append(f"  - Driver: {driver_info.strip()}")
+
         advanced = specs.get('AdvancedHealth', {})
         wifi = advanced.get('wifi', {})
         wifi_status = wifi.get('status')
         if wifi_status == 'ok':
-            signal   = wifi.get('signal_pct')
-            rx_rate  = wifi.get('rx_rate_mbps')
-            tx_rate  = wifi.get('tx_rate_mbps')
-            gen      = wifi.get('wifi_gen', wifi.get('radio_type', ''))
-            ssid     = wifi.get('ssid', '')
-            adapter  = wifi.get('adapter_name', '')
-            signal_label = (
-                f"{signal}% \u2014 \u26a0 Very Weak" if signal is not None and signal < 20 else
-                f"{signal}% \u2014 \u26a0 Weak" if signal is not None and signal < 40 else
-                f"{signal}%"
-            ) if signal is not None else 'N/A'
+            signal = wifi.get('signal_pct')
+            rx_rate = wifi.get('rx_rate_mbps')
+            tx_rate = wifi.get('tx_rate_mbps')
+            gen = wifi.get('wifi_gen', wifi.get('radio_type', ''))
+            ssid = wifi.get('ssid', '')
+            adapter = wifi.get('adapter_name', '')
             if adapter:
                 content.append(f"<strong>WiFi Adapter:</strong> {adapter}")
-            content.append(
-                f"<strong>WiFi:</strong> {gen} \u2014 Signal: {signal_label}"
-                + (f", Link: {rx_rate:.0f} / {tx_rate:.0f} Mbps (RX/TX)" if rx_rate and tx_rate else "")
-                + (f", SSID: {ssid}" if ssid else "")
-            )
+            if gen:
+                content.append(f"<strong>WiFi Standard:</strong> {gen}")
+            if ssid:
+                content.append(f"<strong>SSID:</strong> {ssid}")
+            if signal is not None:
+                signal_label = (
+                    f"{signal}% — Very Weak" if signal < 20 else
+                    f"{signal}% — Weak" if signal < 40 else
+                    f"{signal}%"
+                )
+                content.append(f"<strong>WiFi Signal:</strong> {signal_label}")
+            if rx_rate and tx_rate:
+                content.append(f"<strong>Link Speed:</strong> {rx_rate:.0f} / {tx_rate:.0f} Mbps (RX/TX)")
         elif wifi_status == 'disconnected':
-            content.append(f"<strong>WiFi:</strong> \u26a0 Adapter present but not connected")
+            content.append("<strong>WiFi:</strong> Adapter present but not connected")
         elif wifi_status == 'permission_required':
-            content.append(
-                "<strong>WiFi:</strong> Windows Location permission required "
-                "to read WLAN details"
-            )
+            content.append("<strong>WiFi:</strong> Windows Location permission required to read WiFi details")
         elif wifi_status == 'no_adapter':
-            content.append(f"<strong>WiFi:</strong> No wireless adapter detected")
+            content.append("<strong>WiFi:</strong> No wireless adapter detected")
 
-        # Only emit section if we have actual adapter data
         if content:
-            lines = ["<strong>Network</strong>"]
+            lines = ["<strong>Network & Peripherals</strong>"]
             lines.extend(content)
             return lines
         return []
@@ -1206,7 +1366,7 @@ class ReportFormatter:
         skip_cats = specs.get('_job_skip_cats', set())
 
         if 'display' in skip_cats or specs.get('Display') == 'Test skipped':
-            return ["<strong>Display</strong>", "<strong>Status:</strong> Test skipped"]
+            return ["<strong>Monitors</strong>", "<strong>Status:</strong> Test skipped"]
 
         # Check if laptop (has panel details)
         panel_details = specs.get('PanelDetails', {})
@@ -1322,7 +1482,7 @@ class ReportFormatter:
 
         # Only emit section if we have actual display data
         if content:
-            lines = ["<strong>Display</strong>"]
+            lines = ["<strong>Monitors</strong>"]
             lines.extend(content)
             return lines
         return []
@@ -1606,7 +1766,7 @@ class ReportFormatter:
     def _format_advanced_health(self, specs):
         """Format extended system health checks"""
         lines = []
-        lines.append("<strong>System Health</strong>")
+        lines.append("<strong>Advanced Diagnostics</strong>")
 
         advanced = specs.get('AdvancedHealth', {})
         skip_cats = specs.get('_job_skip_cats', set())
@@ -1617,7 +1777,6 @@ class ReportFormatter:
         )
         if all(category in skip_cats for category in advanced_categories):
             lines.append("<strong>Status:</strong> Test skipped")
-            lines.append("")
             return lines
 
         event_viewer = advanced.get('event_viewer', {})
@@ -1745,8 +1904,6 @@ class ReportFormatter:
                     lines.append(f"  - Last boot: {boot_time['last_boot']}")
                 if boot_time.get('classification'):
                     lines.append(f"  - Boot assessment: {boot_time['classification']}")
-
-        lines.append("")
 
         return lines
 
