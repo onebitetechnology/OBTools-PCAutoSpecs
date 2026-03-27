@@ -163,6 +163,7 @@ class MainWindow(QMainWindow):
         self._startup_update_download_worker = None
         self._startup_update_info = None
         self._startup_update_prompt_shown = False
+        self._startup_dialog_open = False
 
         # Job context — set by StartupDialog, carried into scan + report
         self._job_tech_name     = self._settings.get('last_tech_name', '')
@@ -286,6 +287,7 @@ class MainWindow(QMainWindow):
         Keeps __init__ clean so Qt doesn't crash on pre-show widget calls.
         """
         try:
+            self._start_startup_update_check()
             self._start_lhm()
             self._ensure_wifi()
             if self._lhm_launched or self._is_lhm_web_server_available() or self._count_running_lhm_processes() > 0:
@@ -563,12 +565,15 @@ class MainWindow(QMainWindow):
     def _show_startup_dialog(self):
         """Show the job setup startup dialog, then begin scan."""
         try:
+            self._startup_dialog_open = True
             dlg = StartupDialog(parent=self)
         except Exception as e:
+            self._startup_dialog_open = False
             logging.error(f"StartupDialog failed to create: {e}", exc_info=True)
             self._start_spec_collection()
             return
         result = dlg.exec()
+        self._startup_dialog_open = False
 
         # Collect whatever was entered before deciding whether to scan.
         self._job_tech_name   = dlg.tech_name   or self._job_tech_name
@@ -582,7 +587,7 @@ class MainWindow(QMainWindow):
 
         # Update header subtitle to show tech + ticket if available
         self._update_header_context()
-        self._start_startup_update_check()
+        self._maybe_prompt_for_update()
 
         if result != StartupDialog.Accepted:
             if dlg.skip_scan_requested:
@@ -993,6 +998,9 @@ class MainWindow(QMainWindow):
         if not self._startup_update_info:
             return
         if not (self._startup_update_info.get('available') or self._startup_update_info.get('downloaded')):
+            return
+        if self._startup_dialog_open:
+            QTimer.singleShot(1500, self._maybe_prompt_for_update)
             return
         if self._scan_in_progress:
             QTimer.singleShot(1500, self._maybe_prompt_for_update)
