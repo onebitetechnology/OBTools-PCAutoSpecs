@@ -1499,13 +1499,33 @@ class ReportPreviewDialog(QDialog):
 
         self._editor = QTextEdit()
         self._editor.setStyleSheet(
-            f"background-color: {COLORS['console_bg']}; "
-            f"color: {COLORS['console_text']}; "
+            "background-color: #FFFFFF; "
+            "color: #111827; "
             f"border: 1px solid {COLORS['card_border']}; "
             "border-radius: 8px; padding: 16px; "
             "font-family: 'Segoe UI', 'Arial', sans-serif; "
             "font-size: 10pt; "
             f"selection-background-color: {COLORS['primary']};")
+        self._editor.document().setDefaultStyleSheet("""
+            body, div, p, span {
+                color: #111827;
+                background-color: #FFFFFF;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 10pt;
+                line-height: 1.3;
+            }
+            strong {
+                color: #111827;
+                font-weight: 700;
+            }
+            ul, ol {
+                margin-top: 0;
+                margin-bottom: 0;
+            }
+            li {
+                margin: 0;
+            }
+        """)
         layout.addWidget(self._editor, 1)
         layout.setContentsMargins(16, 0, 16, 0)
         self._editor.textChanged.connect(self._update_char_count)
