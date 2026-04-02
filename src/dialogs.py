@@ -2596,6 +2596,8 @@ class SettingsDialog(QDialog):
             self,
             "Install Update",
             "The downloaded installer will open after PC AutoSpec closes.\n\n"
+            "It will prefill the folder PC AutoSpec is currently running from,\n"
+            "so USB updates stay on the USB by default.\n\n"
             "Save any work first, then continue.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,

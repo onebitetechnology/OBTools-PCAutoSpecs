@@ -20,7 +20,7 @@ from typing import Callable, Dict, Optional
 
 import requests
 
-from settings import APP_NAME, APP_VERSION, load_settings
+from settings import APP_NAME, APP_VERSION, load_settings, get_app_dir
 
 REPO_OWNER = "onebitetechnology"
 REPO_NAME = "OBTools-PCAutoSpecs"
@@ -322,7 +322,7 @@ def download_update(
     }
 
 
-def launch_pending_update(installer_path: str) -> None:
+def launch_pending_update(installer_path: str, install_dir: Optional[str] = None) -> None:
     """
     Launch the installer after the app exits.
 
@@ -336,11 +336,19 @@ def launch_pending_update(installer_path: str) -> None:
     if not installer.is_file():
         raise RuntimeError("Downloaded installer file was not found.")
 
+    if install_dir is None:
+        install_dir = get_app_dir()
+
+    install_dir = str(Path(install_dir).resolve()) if install_dir else ""
+    installer_cmd = f'start "" "{installer}"'
+    if install_dir:
+        installer_cmd += f' /DIR="{install_dir}"'
+
     launcher_script = _download_root() / "launch-update.cmd"
     launcher_script.write_text(
         "@echo off\n"
         "ping 127.0.0.1 -n 3 > nul\n"
-        f'start "" "{installer}"\n'
+        f"{installer_cmd}\n"
         'del "%~f0"\n',
         encoding="utf-8",
     )
