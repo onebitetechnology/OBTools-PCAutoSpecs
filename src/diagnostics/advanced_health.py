@@ -1483,12 +1483,28 @@ def collect_disk_speed_test(path: str = "C:\\", test_size_mb: int = 256) -> Dict
         # Calculate speeds
         write_speed = _mb_per_sec(test_size_mb * 1024 * 1024, write_time)
         read_speed = _mb_per_sec(read_bytes, read_time)
-        
+
+        # Windows file cache can make slow HDDs appear wildly fast on the read
+        # pass immediately after the write. When the read result is implausibly
+        # higher than the sustained write speed, prefer a conservative displayed
+        # read speed so the UI/report does not mislabel the drive class.
+        cached_read_likely = (
+            write_speed > 0
+            and write_speed < 350
+            and read_speed > max(write_speed * 2.25, 450)
+        )
+        display_read_speed = read_speed
+        if cached_read_likely:
+            display_read_speed = min(read_speed, max(write_speed * 1.15, write_speed + 20))
+
         return {
             "status": "ok",
             "test_size_mb": test_size_mb,
             "write_mb_s": round(write_speed, 1),
             "read_mb_s": round(read_speed, 1),
+            "display_write_mb_s": round(write_speed, 1),
+            "display_read_mb_s": round(display_read_speed, 1),
+            "cached_read_likely": cached_read_likely,
             "path": path,
             "write_time_sec": round(write_time, 2),
             "read_time_sec": round(read_time, 2)
@@ -2144,10 +2160,11 @@ def collect_advanced_health_summary(
         try:
             import signal
             results['disk_speed'] = collect_disk_speed_test("C:\\", test_size_mb=32)
-            write = results['disk_speed'].get('write_mb_s')
-            read = results['disk_speed'].get('read_mb_s')
+            write = results['disk_speed'].get('display_write_mb_s', results['disk_speed'].get('write_mb_s'))
+            read = results['disk_speed'].get('display_read_mb_s', results['disk_speed'].get('read_mb_s'))
             if write and read:
-                _log(f"  Drive speed: Read {read:.0f} MB/s, Write {write:.0f} MB/s\n")
+                suffix = " (cached read corrected)" if results['disk_speed'].get('cached_read_likely') else ""
+                _log(f"  Drive speed: Read {read:.0f} MB/s, Write {write:.0f} MB/s{suffix}\n")
             else:
                 _log(f"  Drive speed: unavailable\n")
         except Exception as e:

@@ -10,6 +10,7 @@ import logging
 import subprocess
 import os
 import re
+import json
 from datetime import datetime, timedelta
 
 try:
@@ -2346,7 +2347,6 @@ def _get_gpu_detailed_metrics(gpu_name):
             )
             
             if result.returncode == 0 and result.stdout.strip():
-                import json
                 amd_data = json.loads(result.stdout.strip())
                 if amd_data.get('temperature'):
                     metrics['temperature'] = amd_data['temperature']
@@ -2985,14 +2985,14 @@ def _classify_basic_drive_type(model, media_type, interface, bus_type):
         return "NVMe SSD"
     if bus_upper == "USB":
         return "USB"
-    if bus_upper == "SATA" and ("SSD" in model_upper or "SSD" in media_upper):
+    if bus_upper == "SATA" and ("SSD" in model_upper or "SSD" in media_upper or "SOLID STATE" in media_upper):
         return "SATA SSD"
     if bus_upper == "SATA" and ("HDD" in media_upper or "HARD DISK" in media_upper):
         return "HDD"
 
     if "NVME" in model_upper or "NVM" in model_upper or "NVME" in interface_upper:
         return "NVMe SSD"
-    if "SSD" in model_upper or "SSD" in media_upper:
+    if "SSD" in model_upper or "SSD" in media_upper or "SOLID STATE" in media_upper:
         return "SATA SSD"
     if "HDD" in media_upper or "HARD DISK" in media_upper:
         return "HDD"
@@ -4315,7 +4315,16 @@ def _get_storage_health_structured(com_wmi):
                             'model': drive_model,
                             'size_gb': drive_size_gb,
                             'partition_style': partition_style,
+                            'media_type': disk.Properties_("MediaType").Value or "Unknown",
+                            'interface': disk.Properties_("InterfaceType").Value or "Unknown",
+                            'bus_type': _get_disk_bus_type(disk_index),
                         }
+                        drive_info['friendly_type'] = _classify_basic_drive_type(
+                            drive_info.get('model'),
+                            drive_info.get('media_type'),
+                            drive_info.get('interface'),
+                            drive_info.get('bus_type'),
+                        )
 
                         # USB drives - Skip SMART checking (unreliable for USB devices)
                         if 'USB' in drive_model.upper():
@@ -5139,7 +5148,6 @@ def _get_battery_static_data():
         )
         
         if result.returncode == 0 and result.stdout.strip():
-            import json
             data = json.loads(result.stdout.strip())
             if data:
                 logging.debug(f"BatteryStaticData found: {data}")
@@ -5779,7 +5787,6 @@ def _get_panel_details():
         )
         
         if result.returncode == 0 and result.stdout.strip():
-            import json
             panel_data = json.loads(result.stdout.strip())
             
             # Only return if we got meaningful data

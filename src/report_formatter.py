@@ -298,13 +298,17 @@ class ReportFormatter:
 
     @staticmethod
     def _classify_drive_type(drive):
+        friendly_type = drive.get('friendly_type')
+        if friendly_type:
+            return friendly_type
         bus_type = (drive.get('bus_type') or '').upper()
         model = (drive.get('model') or '').upper()
+        media = (drive.get('media_type') or '').upper()
         if bus_type == 'NVME':
             return 'NVMe SSD'
-        if bus_type == 'SATA' and ('SSD' in model or drive.get('percentage_used') is not None):
+        if bus_type == 'SATA' and ('SSD' in model or 'SSD' in media or 'SOLID STATE' in media):
             return 'SATA SSD'
-        if bus_type == 'SATA' and (drive.get('media_type', '').upper() == 'HDD' or drive.get('reallocated_sectors') is not None):
+        if bus_type == 'SATA' and ('HDD' in media or 'HARD DISK' in media):
             return 'HDD'
         if bus_type == 'USB':
             return 'USB'
@@ -312,9 +316,9 @@ class ReportFormatter:
             return 'NVMe SSD'
         if 'USB' in model or drive.get('status') == 'N/A':
             return 'USB'
-        if 'SSD' in model or drive.get('percentage_used') is not None:
+        if 'SSD' in model or 'SSD' in media or 'SOLID STATE' in media:
             return 'SATA SSD'
-        if drive.get('media_type', '').upper() == 'HDD' or drive.get('reallocated_sectors') is not None:
+        if 'HDD' in media or 'HARD DISK' in media:
             return 'HDD'
         return None
 
@@ -507,8 +511,8 @@ class ReportFormatter:
         # Drive speed
         disk_speed = advanced.get('disk_speed', {})
         if 'storage' not in skip_cats and disk_speed.get('status') == 'ok':
-            read_mb = disk_speed.get('read_mb_s', 0)
-            write_mb = disk_speed.get('write_mb_s', 0)
+            read_mb = disk_speed.get('display_read_mb_s', disk_speed.get('read_mb_s', 0))
+            write_mb = disk_speed.get('display_write_mb_s', disk_speed.get('write_mb_s', 0))
             if read_mb < 80 or write_mb < 50:
                 issues.append(
                     f"Drive Speed: VERY SLOW (Read {read_mb:.0f} MB/s, Write {write_mb:.0f} MB/s"
@@ -1154,18 +1158,7 @@ class ReportFormatter:
             model = drive.get('model', 'Unknown Drive')
             size_gb = drive.get('size_gb', 0)
 
-            # Detect drive type (mirrors GUI _detect_drive_type logic)
-            m_upper = model.upper()
-            if 'NVME' in m_upper or 'NVM' in m_upper or drive.get('available_spare') is not None:
-                drive_type = 'NVMe SSD'
-            elif 'USB' in m_upper or drive.get('status') == 'N/A':
-                drive_type = 'USB'
-            elif 'SSD' in m_upper or drive.get('percentage_used') is not None:
-                drive_type = 'SATA SSD'
-            elif drive.get('media_type', '').upper() == 'HDD' or drive.get('reallocated_sectors') is not None:
-                drive_type = 'HDD'
-            else:
-                drive_type = None
+            drive_type = self._classify_drive_type(drive)
 
             drive_label = f"{model} ({drive_type})" if drive_type and drive_type.upper() not in m_upper else model
             lines.append(f"<strong>Drive {drive_num}: {drive_label}</strong>")
@@ -1266,15 +1259,16 @@ class ReportFormatter:
         advanced = specs.get('AdvancedHealth', {})
         disk_speed = advanced.get('disk_speed', {})
         if disk_speed.get('status') == 'ok':
-            read_speed = disk_speed.get('read_mb_s', 0)
-            write_speed = disk_speed.get('write_mb_s', 0)
+            read_speed = disk_speed.get('display_read_mb_s', disk_speed.get('read_mb_s', 0))
+            write_speed = disk_speed.get('display_write_mb_s', disk_speed.get('write_mb_s', 0))
             if read_speed > 2000:
                 speed_cat = 'NVMe'
             elif read_speed > 400:
                 speed_cat = 'SATA SSD'
             else:
                 speed_cat = 'HDD/Slow'
-            lines.append(f"<strong>Disk Speed (C:):</strong> {read_speed:.0f} MB/s read, {write_speed:.0f} MB/s write ({speed_cat})")
+            suffix = " (cached read corrected)" if disk_speed.get('cached_read_likely') else ""
+            lines.append(f"<strong>Disk Speed (C:):</strong> {read_speed:.0f} MB/s read, {write_speed:.0f} MB/s write ({speed_cat}){suffix}")
 
         return lines
 

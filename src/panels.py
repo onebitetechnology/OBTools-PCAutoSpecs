@@ -841,17 +841,18 @@ class SystemInfoPanel(QWidget):
                 adv = specs.get('AdvancedHealth', {})
                 ds = adv.get('disk_speed', {})
                 if ds.get('status') == 'ok':
-                    rd = ds.get('read_mb_s', 0)
-                    wr = ds.get('write_mb_s', 0)
+                    rd = ds.get('display_read_mb_s', ds.get('read_mb_s', 0))
+                    wr = ds.get('display_write_mb_s', ds.get('write_mb_s', 0))
                     if rd > 2000:
                         cat, col = 'NVMe', COLORS['success']
                     elif rd > 400:
                         cat, col = 'SATA SSD', COLORS['info']
                     else:
                         cat, col = 'HDD/Slow', COLORS['warning']
+                    suffix = " (cached read corrected)" if ds.get('cached_read_likely') else ""
                     sec.add_info_row(
                         'Disk Speed',
-                        f"{rd:.0f}MB/s read, {wr:.0f}MB/s write ({cat})",
+                        f"{rd:.0f}MB/s read, {wr:.0f}MB/s write ({cat}){suffix}",
                         color=col)
 
     def _display_smart_rows(self, sec, health_info):
