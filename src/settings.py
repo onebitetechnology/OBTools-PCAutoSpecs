@@ -10,7 +10,7 @@ import json
 import logging
 
 APP_NAME = 'PC AutoSpec'
-APP_VERSION = '2.2.45-beta.12'
+APP_VERSION = '2.2.45-beta.14'
 
 # ---------------------------------------------------------------------------
 # Paths — everything lives next to the exe (portable)
@@ -56,8 +56,8 @@ DEFAULTS = {
     'api_key': '',
     'store_name': '',
     'api_base_url': 'https://api.repairdesk.co/api/web/v1',
-    'oauth_authorize_url': 'https://api.repairdesk.co/v1/oauth2/authorize',
-    'oauth_token_url': 'https://api.repairdesk.co/v1/oauth2/token',
+    'oauth_authorize_url': 'https://api.repairdesk.co/api/web/v1/oauth2/authorize',
+    'oauth_token_url': 'https://api.repairdesk.co/api/web/v1/oauth2/token',
     'oauth_redirect_uri': 'http://127.0.0.1:8765/callback',
     'oauth_client_id': '',
     'oauth_client_secret': '',
@@ -92,6 +92,12 @@ def load_settings():
             settings.update(saved)
         except Exception as e:
             logging.warning(f"Could not load settings from {path}: {e}")
+
+    # Migrate earlier OAuth defaults that pointed at the wrong base path.
+    if settings.get('oauth_authorize_url') == 'https://api.repairdesk.co/v1/oauth2/authorize':
+        settings['oauth_authorize_url'] = DEFAULTS['oauth_authorize_url']
+    if settings.get('oauth_token_url') == 'https://api.repairdesk.co/v1/oauth2/token':
+        settings['oauth_token_url'] = DEFAULTS['oauth_token_url']
     return settings
 
 

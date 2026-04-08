@@ -1,14 +1,23 @@
 {
+  "auth_mode": "api_key",
   "api_key": "REPLACE_WITH_REPAIRDESK_API_KEY",
   "store_name": "Your Store Name",
   "api_base_url": "https://api.repairdesk.co/api/web/v1",
+  "oauth_authorize_url": "https://api.repairdesk.co/api/web/v1/oauth2/authorize",
+  "oauth_token_url": "https://api.repairdesk.co/api/web/v1/oauth2/token",
+  "oauth_redirect_uri": "http://127.0.0.1:8765/callback",
+  "oauth_client_id": "",
+  "oauth_client_secret": "",
+  "oauth_access_token": "",
+  "oauth_refresh_token": "",
+  "oauth_token_expires_at": "",
   "tickets_per_page": 100,
   "wifi_ssid": "YourGuestWifi",
   "wifi_password": "REPLACE_WITH_WIFI_PASSWORD",
   "wifi_auto_connect": true,
   "technicians": [
     {
-      "name": "Jeff",
+      "name": "Tech Name",
       "api_key": "OPTIONAL_TECH_SPECIFIC_API_KEY"
     }
   ],

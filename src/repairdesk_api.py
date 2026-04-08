@@ -14,6 +14,21 @@ from config import get_api_base_url, get_api_key, get_auth_mode, get_tickets_per
 from oauth_repairdesk import ensure_valid_access_token
 
 
+def _redact_sensitive_text(value):
+    text = str(value or "")
+    patterns = [
+        (r'([?&]api_key=)[^&\s]+', r'\1[REDACTED]'),
+        (r'(Authorization[\'"]?\s*[:=]\s*[\'"]?Bearer\s+)[A-Za-z0-9._\-~+/=]+', r'\1[REDACTED]'),
+        (r'([?&]client_secret=)[^&\s]+', r'\1[REDACTED]'),
+        (r'([?&]refresh_token=)[^&\s]+', r'\1[REDACTED]'),
+        (r'([?&]access_token=)[^&\s]+', r'\1[REDACTED]'),
+    ]
+    import re
+    for pattern, replacement in patterns:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 class RepairDeskAPI:
     """Client for interacting with RepairDesk API."""
 
@@ -82,7 +97,7 @@ class RepairDeskAPI:
         except requests.exceptions.ConnectionError:
             return False, "Could not reach RepairDesk API — check internet connection"
         except Exception as e:
-            return False, f"Connection error: {str(e)}"
+            return False, f"Connection error: {_redact_sensitive_text(e)}"
 
     def resolve_ticket_id(self, ticket_short_id):
         result = self._find_ticket(ticket_short_id)
@@ -186,11 +201,11 @@ class RepairDeskAPI:
                 break
 
             except requests.exceptions.RequestException as e:
-                raise Exception(f"API request failed: {str(e)}")
+                raise Exception(f"API request failed: {_redact_sensitive_text(e)}")
             except json.JSONDecodeError as e:
                 raise Exception(f"Invalid JSON response: {str(e)}")
             except Exception as e:
-                raise Exception(f"Error resolving ticket ID: {str(e)}")
+                raise Exception(f"Error resolving ticket ID: {_redact_sensitive_text(e)}")
 
         raise Exception(f"Ticket number {ticket_short_id} not found.")
 
@@ -211,8 +226,8 @@ class RepairDeskAPI:
             )
             return response.json()
         except requests.exceptions.RequestException as e:
-            return {"success": False, "message": f"Request error: {str(e)}"}
+            return {"success": False, "message": f"Request error: {_redact_sensitive_text(e)}"}
         except json.JSONDecodeError as e:
             return {"success": False, "message": f"Invalid JSON response: {str(e)}"}
         except Exception as e:
-            return {"success": False, "message": f"Unexpected error: {str(e)}"}
+            return {"success": False, "message": f"Unexpected error: {_redact_sensitive_text(e)}"}

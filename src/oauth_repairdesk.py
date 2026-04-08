@@ -18,6 +18,20 @@ import requests
 from settings import load_settings, save_settings
 
 
+def _redact_sensitive_text(value):
+    text = str(value or "")
+    import re
+    patterns = [
+        (r'([?&]client_secret=)[^&\s]+', r'\1[REDACTED]'),
+        (r'([?&]refresh_token=)[^&\s]+', r'\1[REDACTED]'),
+        (r'([?&]access_token=)[^&\s]+', r'\1[REDACTED]'),
+        (r'([?&]code=)[^&\s]+', r'\1[REDACTED]'),
+    ]
+    for pattern, replacement in patterns:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -155,7 +169,7 @@ def ensure_valid_access_token(settings: Optional[Dict] = None) -> Optional[str]:
             token_data = refresh_access_token(settings)
             access_token = str(token_data.get("access_token", "")).strip() or access_token
         except Exception as e:
-            logging.warning(f"RepairDesk OAuth token refresh failed: {e}")
+            logging.warning(f"RepairDesk OAuth token refresh failed: {_redact_sensitive_text(e)}")
     return access_token or None
 
 
