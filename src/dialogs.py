@@ -274,8 +274,7 @@ class StartupDialog(QDialog):
     def __init__(self, parent=None, prefill_tech_name=""):
         super().__init__(parent)
         self.setWindowTitle("Job Setup")
-        self.setMinimumSize(760, 640)
-        self.setMaximumWidth(1120)
+        self.setMinimumSize(860, 700)
 
         # Result attributes (populated on accept or left as defaults on skip)
         self.tech_name       = ""
@@ -293,16 +292,19 @@ class StartupDialog(QDialog):
             f"QDialog#jobSetupDialog {{ background-color: {COLORS['bg_root']}; }}"
         )
 
-        screen = QApplication.primaryScreen()
+        screen = self.screen() or QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
             self.resize(
-                min(1040, max(760, available.width() - 160)),
-                min(900, max(640, available.height() - 140)),
+                min(1320, max(860, available.width() - 80)),
+                min(1040, max(700, available.height() - 90)),
             )
-            self.setMaximumHeight(max(680, available.height() - 80))
+            self.setMaximumSize(
+                max(860, available.width() - 40),
+                max(700, available.height() - 40),
+            )
         else:
-            self.resize(960, 820)
+            self.resize(1120, 900)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
