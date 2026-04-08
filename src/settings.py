@@ -10,7 +10,7 @@ import json
 import logging
 
 APP_NAME = 'PC AutoSpec'
-APP_VERSION = '2.2.45-beta.11'
+APP_VERSION = '2.2.45-beta.12'
 
 # ---------------------------------------------------------------------------
 # Paths — everything lives next to the exe (portable)
@@ -52,9 +52,18 @@ def get_vendor_dir():
 # ---------------------------------------------------------------------------
 
 DEFAULTS = {
+    'auth_mode': 'api_key',
     'api_key': '',
     'store_name': '',
     'api_base_url': 'https://api.repairdesk.co/api/web/v1',
+    'oauth_authorize_url': 'https://api.repairdesk.co/v1/oauth2/authorize',
+    'oauth_token_url': 'https://api.repairdesk.co/v1/oauth2/token',
+    'oauth_redirect_uri': 'http://127.0.0.1:8765/callback',
+    'oauth_client_id': '',
+    'oauth_client_secret': '',
+    'oauth_access_token': '',
+    'oauth_refresh_token': '',
+    'oauth_token_expires_at': '',
     'tickets_per_page': 100,
     'include_beta_updates': False,
     'wifi_ssid': '',
@@ -102,19 +111,22 @@ def save_settings(settings):
 # ---------------------------------------------------------------------------
 
 def is_configured():
-    """True if the user has entered an API key."""
+    """True if the app has valid auth configured."""
     settings = load_settings()
+    if settings.get('auth_mode', 'api_key') == 'oauth':
+        return bool(settings.get('oauth_access_token', '').strip())
     return bool(settings.get('api_key', '').strip())
 
 
 def is_first_run_setup_complete():
     """True when the initial setup fields required for a fresh install are present."""
     settings = load_settings()
-    required_fields = (
-        settings.get('store_name', '').strip(),
-        settings.get('api_key', '').strip(),
-    )
-    return all(required_fields)
+    has_store = bool(settings.get('store_name', '').strip())
+    if settings.get('auth_mode', 'api_key') == 'oauth':
+        has_auth = bool(settings.get('oauth_access_token', '').strip())
+    else:
+        has_auth = bool(settings.get('api_key', '').strip())
+    return has_store and has_auth
 
 
 def get_window_title():
@@ -215,3 +227,8 @@ def get_active_api_key(tech_name=None):
     settings = load_settings()
     global_key = settings.get('api_key', '').strip()
     return global_key, 'global'
+
+
+def get_auth_mode():
+    """Return the configured auth mode: api_key or oauth."""
+    return load_settings().get('auth_mode', DEFAULTS['auth_mode'])

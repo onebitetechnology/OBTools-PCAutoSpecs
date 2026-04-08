@@ -31,8 +31,9 @@ from settings import (
     UPLOAD_SCOPE_CHOICES, DEFAULT_UPLOAD_SCOPE,
     UPLOAD_SCOPE_OVERVIEW, UPLOAD_SCOPE_FULL,
     get_tech_names, get_tech_api_key, save_technicians,
-    get_technicians, get_app_dir,
+    get_technicians, get_app_dir, get_auth_mode,
 )
+from oauth_repairdesk import clear_oauth_tokens, oauth_is_connected, run_oauth_flow
 from repairdesk_api import RepairDeskAPI
 from updater import get_pending_update, launch_pending_update
 from workers import UpdateCheckWorker, UpdateDownloadWorker
@@ -880,9 +881,10 @@ class WelcomeDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._settings = load_settings()
+        self._oauth_connected = oauth_is_connected(self._settings)
 
         self.setWindowTitle(f"{APP_NAME} — First Use Setup")
-        self.setFixedSize(560, 500)
+        self.setFixedSize(560, 620)
         self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -923,11 +925,27 @@ class WelcomeDialog(QDialog):
         self._store_input.setText(self._settings.get('store_name', ''))
         layout.addWidget(self._store_input)
 
+        # Auth mode
+        auth_label = QLabel("RepairDesk Authentication")
+        auth_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; "
+            "font-weight: bold;")
+        layout.addWidget(auth_label)
+
+        self._auth_mode_combo = QComboBox()
+        self._auth_mode_combo.addItem("API Key", "api_key")
+        self._auth_mode_combo.addItem("OAuth 2.0", "oauth")
+        current_auth_mode = self._settings.get('auth_mode', 'api_key')
+        self._auth_mode_combo.setCurrentIndex(1 if current_auth_mode == 'oauth' else 0)
+        self._auth_mode_combo.currentIndexChanged.connect(self._sync_auth_mode_ui)
+        layout.addWidget(self._auth_mode_combo)
+
         # API key
         key_label = QLabel("RepairDesk API Key")
         key_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 10px; "
             "font-weight: bold;")
+        self._api_key_label = key_label
         layout.addWidget(key_label)
 
         self._key_input = QLineEdit()
@@ -948,7 +966,96 @@ class WelcomeDialog(QDialog):
             )
         )
         key_row.addWidget(self._show_key_cb)
+        self._api_key_row = key_row
         layout.addLayout(key_row)
+
+        self._oauth_body = QWidget()
+        oauth_layout = QVBoxLayout(self._oauth_body)
+        oauth_layout.setContentsMargins(0, 0, 0, 0)
+        oauth_layout.setSpacing(8)
+
+        client_row = QHBoxLayout()
+        client_row.setSpacing(8)
+        client_lbl = QLabel("Client ID")
+        client_lbl.setFixedWidth(90)
+        client_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; font-weight: bold;")
+        client_row.addWidget(client_lbl)
+        self._oauth_client_id_input = QLineEdit()
+        self._oauth_client_id_input.setText(self._settings.get('oauth_client_id', ''))
+        self._oauth_client_id_input.setPlaceholderText("RepairDesk OAuth client ID")
+        client_row.addWidget(self._oauth_client_id_input)
+        oauth_layout.addLayout(client_row)
+
+        secret_row = QHBoxLayout()
+        secret_row.setSpacing(8)
+        secret_lbl = QLabel("Client Secret")
+        secret_lbl.setFixedWidth(90)
+        secret_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; font-weight: bold;")
+        secret_row.addWidget(secret_lbl)
+        self._oauth_client_secret_input = QLineEdit()
+        self._oauth_client_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._oauth_client_secret_input.setText(self._settings.get('oauth_client_secret', ''))
+        self._oauth_client_secret_input.setPlaceholderText("RepairDesk OAuth client secret")
+        secret_row.addWidget(self._oauth_client_secret_input)
+        self._show_oauth_secret_cb = QCheckBox("Show")
+        self._show_oauth_secret_cb.setStyleSheet("border: none;")
+        self._show_oauth_secret_cb.toggled.connect(
+            lambda checked: self._oauth_client_secret_input.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        secret_row.addWidget(self._show_oauth_secret_cb)
+        oauth_layout.addLayout(secret_row)
+
+        redirect_row = QHBoxLayout()
+        redirect_row.setSpacing(8)
+        redirect_lbl = QLabel("Redirect URI")
+        redirect_lbl.setFixedWidth(90)
+        redirect_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10px; font-weight: bold;")
+        redirect_row.addWidget(redirect_lbl)
+        self._oauth_redirect_input = QLineEdit()
+        self._oauth_redirect_input.setText(
+            self._settings.get('oauth_redirect_uri', DEFAULTS['oauth_redirect_uri'])
+        )
+        redirect_row.addWidget(self._oauth_redirect_input)
+        oauth_layout.addLayout(redirect_row)
+
+        oauth_btn_row = QHBoxLayout()
+        oauth_btn_row.setSpacing(8)
+        self._oauth_connect_btn = QPushButton("Connect OAuth")
+        self._oauth_connect_btn.setObjectName("secondary")
+        self._oauth_connect_btn.setCursor(Qt.PointingHandCursor)
+        self._oauth_connect_btn.clicked.connect(self._on_connect_oauth)
+        oauth_btn_row.addWidget(self._oauth_connect_btn)
+
+        self._oauth_disconnect_btn = QPushButton("Disconnect")
+        self._oauth_disconnect_btn.setObjectName("secondary")
+        self._oauth_disconnect_btn.setCursor(Qt.PointingHandCursor)
+        self._oauth_disconnect_btn.clicked.connect(self._on_disconnect_oauth)
+        oauth_btn_row.addWidget(self._oauth_disconnect_btn)
+        oauth_btn_row.addStretch()
+        oauth_layout.addLayout(oauth_btn_row)
+
+        self._oauth_status = QLabel()
+        self._oauth_status.setWordWrap(True)
+        self._oauth_status.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt;")
+        oauth_layout.addWidget(self._oauth_status)
+
+        oauth_help = QLabel(
+            "OAuth opens RepairDesk in your browser so you can approve PC AutoSpec."
+        )
+        oauth_help.setWordWrap(True)
+        oauth_help.setObjectName("hint")
+        oauth_layout.addWidget(oauth_help)
+
+        layout.addWidget(self._oauth_body)
+        if self._oauth_connected:
+            self._oauth_status.setText("OAuth connected successfully.")
+            self._oauth_status.setStyleSheet(f"color: {COLORS['success']}; font-size: 9pt;")
 
         # WiFi SSID
         wifi_label = QLabel("Shop WiFi SSID  (optional)")
@@ -1012,21 +1119,72 @@ class WelcomeDialog(QDialog):
         # Enable save when required fields have content
         self._store_input.textChanged.connect(self._check_fields)
         self._key_input.textChanged.connect(self._check_fields)
+        self._oauth_client_id_input.textChanged.connect(self._check_fields)
+        self._oauth_client_secret_input.textChanged.connect(self._check_fields)
+        self._oauth_redirect_input.textChanged.connect(self._check_fields)
         self._wifi_ssid_input.textChanged.connect(self._check_fields)
         self._wifi_pass_input.textChanged.connect(self._check_fields)
+        self._sync_auth_mode_ui()
         self._check_fields()
 
     def _check_fields(self):
         has_store = len(self._store_input.text().strip()) > 0
-        has_key = len(self._key_input.text().strip()) > 5
-        self._save_btn.setEnabled(has_store and has_key)
+        if self._auth_mode_combo.currentData() == 'oauth':
+            has_auth = self._oauth_connected
+        else:
+            has_auth = len(self._key_input.text().strip()) > 5
+        self._save_btn.setEnabled(has_store and has_auth)
+
+    def _sync_auth_mode_ui(self):
+        use_oauth = self._auth_mode_combo.currentData() == 'oauth'
+        self._api_key_label.setVisible(not use_oauth)
+        self._key_input.setVisible(not use_oauth)
+        self._show_key_cb.setVisible(not use_oauth)
+        self._oauth_body.setVisible(use_oauth)
+        self._check_fields()
+
+    def _on_connect_oauth(self):
+        oauth_settings = dict(self._settings)
+        oauth_settings['auth_mode'] = 'oauth'
+        oauth_settings['oauth_client_id'] = self._oauth_client_id_input.text().strip()
+        oauth_settings['oauth_client_secret'] = self._oauth_client_secret_input.text().strip()
+        oauth_settings['oauth_redirect_uri'] = (
+            self._oauth_redirect_input.text().strip() or DEFAULTS['oauth_redirect_uri']
+        )
+        try:
+            self._oauth_status.setText("Opening RepairDesk sign-in...")
+            QApplication.processEvents()
+            run_oauth_flow(oauth_settings)
+            self._oauth_connected = True
+            self._settings = load_settings()
+            self._oauth_status.setText("OAuth connected successfully.")
+            self._oauth_status.setStyleSheet(f"color: {COLORS['success']}; font-size: 9pt;")
+        except Exception as e:
+            self._oauth_connected = False
+            self._oauth_status.setText(str(e))
+            self._oauth_status.setStyleSheet(f"color: {COLORS['error']}; font-size: 9pt;")
+        self._check_fields()
+
+    def _on_disconnect_oauth(self):
+        settings = load_settings()
+        clear_oauth_tokens(settings)
+        self._oauth_connected = False
+        self._oauth_status.setText("OAuth connection cleared.")
+        self._oauth_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 9pt;")
+        self._check_fields()
 
     def _on_save(self):
         wifi_ssid = self._wifi_ssid_input.text().strip()
         wifi_password = self._wifi_pass_input.text().strip()
         settings = load_settings()
         settings['store_name'] = self._store_input.text().strip()
+        settings['auth_mode'] = self._auth_mode_combo.currentData()
         settings['api_key'] = self._key_input.text().strip()
+        settings['oauth_client_id'] = self._oauth_client_id_input.text().strip()
+        settings['oauth_client_secret'] = self._oauth_client_secret_input.text().strip()
+        settings['oauth_redirect_uri'] = (
+            self._oauth_redirect_input.text().strip() or DEFAULTS['oauth_redirect_uri']
+        )
         settings['wifi_ssid'] = wifi_ssid
         settings['wifi_password'] = wifi_password
         settings['wifi_auto_connect'] = bool(wifi_ssid)
@@ -1849,6 +2007,7 @@ class SettingsDialog(QDialog):
         }
         self._check_worker = None
         self._download_worker = None
+        self._oauth_connected = oauth_is_connected(self._settings)
 
         self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
 
@@ -1904,7 +2063,9 @@ class SettingsDialog(QDialog):
         card_header.addStretch()
 
         api_prefilled = bool(
-            self._settings.get('store_name', '').strip() and self._settings.get('api_key', '').strip()
+            self._settings.get('store_name', '').strip() and (
+                self._settings.get('api_key', '').strip() or self._oauth_connected
+            )
         )
         self._api_toggle_btn = QPushButton()
         self._api_toggle_btn.setObjectName("secondary")
@@ -1933,6 +2094,22 @@ class SettingsDialog(QDialog):
         store_row.addWidget(self._store_input)
         api_body_layout.addLayout(store_row)
 
+        auth_row = QHBoxLayout()
+        auth_row.setSpacing(8)
+        auth_lbl = QLabel("Auth Mode:")
+        auth_lbl.setFixedWidth(80)
+        auth_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        auth_row.addWidget(auth_lbl)
+        self._auth_mode_combo = QComboBox()
+        self._auth_mode_combo.addItem("API Key", "api_key")
+        self._auth_mode_combo.addItem("OAuth 2.0", "oauth")
+        current_auth_mode = self._settings.get('auth_mode', 'api_key')
+        self._auth_mode_combo.setCurrentIndex(1 if current_auth_mode == 'oauth' else 0)
+        self._auth_mode_combo.currentIndexChanged.connect(self._sync_auth_fields)
+        auth_row.addWidget(self._auth_mode_combo)
+        api_body_layout.addLayout(auth_row)
+
         # API Key row
         key_row = QHBoxLayout()
         key_row.setSpacing(8)
@@ -1951,7 +2128,87 @@ class SettingsDialog(QDialog):
         self._show_key_cb.setStyleSheet(f"border: none;")
         self._show_key_cb.toggled.connect(self._toggle_key_visibility)
         key_row.addWidget(self._show_key_cb)
+        self._api_key_row = key_row
         api_body_layout.addLayout(key_row)
+
+        self._oauth_body = QWidget()
+        oauth_body_layout = QVBoxLayout(self._oauth_body)
+        oauth_body_layout.setContentsMargins(0, 0, 0, 0)
+        oauth_body_layout.setSpacing(8)
+
+        oauth_client_row = QHBoxLayout()
+        oauth_client_row.setSpacing(8)
+        oauth_client_lbl = QLabel("Client ID:")
+        oauth_client_lbl.setFixedWidth(80)
+        oauth_client_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        oauth_client_row.addWidget(oauth_client_lbl)
+        self._oauth_client_id_input = QLineEdit()
+        self._oauth_client_id_input.setText(self._settings.get('oauth_client_id', ''))
+        oauth_client_row.addWidget(self._oauth_client_id_input)
+        oauth_body_layout.addLayout(oauth_client_row)
+
+        oauth_secret_row = QHBoxLayout()
+        oauth_secret_row.setSpacing(8)
+        oauth_secret_lbl = QLabel("Client Secret:")
+        oauth_secret_lbl.setFixedWidth(80)
+        oauth_secret_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        oauth_secret_row.addWidget(oauth_secret_lbl)
+        self._oauth_client_secret_input = QLineEdit()
+        self._oauth_client_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._oauth_client_secret_input.setText(self._settings.get('oauth_client_secret', ''))
+        oauth_secret_row.addWidget(self._oauth_client_secret_input)
+        self._show_oauth_secret_cb = QCheckBox("Show")
+        self._show_oauth_secret_cb.setStyleSheet("border: none;")
+        self._show_oauth_secret_cb.toggled.connect(
+            lambda checked: self._oauth_client_secret_input.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        oauth_secret_row.addWidget(self._show_oauth_secret_cb)
+        oauth_body_layout.addLayout(oauth_secret_row)
+
+        oauth_redirect_row = QHBoxLayout()
+        oauth_redirect_row.setSpacing(8)
+        oauth_redirect_lbl = QLabel("Redirect URI:")
+        oauth_redirect_lbl.setFixedWidth(80)
+        oauth_redirect_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        oauth_redirect_row.addWidget(oauth_redirect_lbl)
+        self._oauth_redirect_input = QLineEdit()
+        self._oauth_redirect_input.setText(
+            self._settings.get('oauth_redirect_uri', DEFAULTS['oauth_redirect_uri'])
+        )
+        oauth_redirect_row.addWidget(self._oauth_redirect_input)
+        oauth_body_layout.addLayout(oauth_redirect_row)
+
+        oauth_actions_row = QHBoxLayout()
+        oauth_actions_row.setSpacing(8)
+        self._oauth_connect_btn = QPushButton("Connect OAuth")
+        self._oauth_connect_btn.setObjectName("secondary")
+        self._oauth_connect_btn.setCursor(Qt.PointingHandCursor)
+        self._oauth_connect_btn.clicked.connect(self._connect_oauth)
+        oauth_actions_row.addWidget(self._oauth_connect_btn)
+        self._oauth_disconnect_btn = QPushButton("Disconnect")
+        self._oauth_disconnect_btn.setObjectName("secondary")
+        self._oauth_disconnect_btn.setCursor(Qt.PointingHandCursor)
+        self._oauth_disconnect_btn.clicked.connect(self._disconnect_oauth)
+        oauth_actions_row.addWidget(self._oauth_disconnect_btn)
+        oauth_actions_row.addStretch()
+        oauth_body_layout.addLayout(oauth_actions_row)
+
+        self._oauth_status = QLabel()
+        self._oauth_status.setWordWrap(True)
+        self._oauth_status.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; border: none;")
+        oauth_body_layout.addWidget(self._oauth_status)
+
+        api_body_layout.addWidget(self._oauth_body)
+        if self._oauth_connected:
+            self._oauth_status.setText("OAuth connected successfully.")
+            self._oauth_status.setStyleSheet(
+                f"color: {COLORS['success']}; border: none;")
 
         # URL row
         url_row = QHBoxLayout()
@@ -1988,8 +2245,7 @@ class SettingsDialog(QDialog):
         # Help text
         help_lbl = QLabel(
             "Settings are saved next to the exe on your USB.\n"
-            "RepairDesk API key: Settings \u2192 Integrations \u2192 API "
-            "in your RD account.")
+            "Use either a legacy RepairDesk API key or OAuth 2.0 desktop sign-in.")
         help_lbl.setObjectName("hint")
         help_lbl.setWordWrap(True)
         api_body_layout.addWidget(help_lbl)
@@ -2290,11 +2546,21 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(btn_bar)
         self._load_pending_update_state()
+        self._sync_auth_fields()
 
     def _toggle_key_visibility(self, checked):
         self._api_key_input.setEchoMode(
             QLineEdit.EchoMode.Normal if checked
             else QLineEdit.EchoMode.Password)
+
+    def _sync_auth_fields(self):
+        use_oauth = self._auth_mode_combo.currentData() == 'oauth'
+        key_label_item = self._api_key_row.itemAt(0)
+        if key_label_item and key_label_item.widget():
+            key_label_item.widget().setVisible(not use_oauth)
+        self._api_key_input.setVisible(not use_oauth)
+        self._show_key_cb.setVisible(not use_oauth)
+        self._oauth_body.setVisible(use_oauth)
 
     def _sync_api_card_toggle(self):
         self._api_body.setVisible(not self._api_collapsed)
@@ -2421,20 +2687,59 @@ class SettingsDialog(QDialog):
             f"color: {COLORS['warning']}; border: none;")
         QApplication.processEvents()
 
-        key = self._api_key_input.text().strip()
         url = self._url_input.text().strip()
-        if not key:
+        auth_mode = self._auth_mode_combo.currentData()
+        if auth_mode == 'oauth' and not self._oauth_connected:
+            self._test_status.setText("Connect OAuth first")
+            self._test_status.setStyleSheet(
+                f"color: {COLORS['error']}; border: none;")
+            return
+        key = self._api_key_input.text().strip()
+        if auth_mode != 'oauth' and not key:
             self._test_status.setText("No API key entered")
             self._test_status.setStyleSheet(
                 f"color: {COLORS['error']}; border: none;")
             return
 
-        api = RepairDeskAPI(api_key=key, base_url=url)
+        api = RepairDeskAPI(api_key=key, base_url=url, auth_mode=auth_mode)
         ok, msg = api.test_connection()
         color = COLORS['success'] if ok else COLORS['error']
         self._test_status.setText(msg)
         self._test_status.setStyleSheet(
             f"color: {color}; border: none;")
+
+    def _connect_oauth(self):
+        oauth_settings = dict(self._settings)
+        oauth_settings['auth_mode'] = 'oauth'
+        oauth_settings['oauth_client_id'] = self._oauth_client_id_input.text().strip()
+        oauth_settings['oauth_client_secret'] = self._oauth_client_secret_input.text().strip()
+        oauth_settings['oauth_redirect_uri'] = (
+            self._oauth_redirect_input.text().strip() or DEFAULTS['oauth_redirect_uri']
+        )
+        try:
+            self._oauth_status.setText("Opening RepairDesk sign-in...")
+            self._oauth_status.setStyleSheet(
+                f"color: {COLORS['warning']}; border: none;")
+            QApplication.processEvents()
+            run_oauth_flow(oauth_settings)
+            self._oauth_connected = True
+            self._settings = load_settings()
+            self._oauth_status.setText("OAuth connected successfully.")
+            self._oauth_status.setStyleSheet(
+                f"color: {COLORS['success']}; border: none;")
+        except Exception as e:
+            self._oauth_connected = False
+            self._oauth_status.setText(str(e))
+            self._oauth_status.setStyleSheet(
+                f"color: {COLORS['error']}; border: none;")
+
+    def _disconnect_oauth(self):
+        settings = load_settings()
+        clear_oauth_tokens(settings)
+        self._oauth_connected = False
+        self._oauth_status.setText("OAuth connection cleared.")
+        self._oauth_status.setStyleSheet(
+            f"color: {COLORS['warning']}; border: none;")
 
     def _set_update_status(self, message, color=None):
         color = color or COLORS['text_secondary']
@@ -2621,9 +2926,20 @@ class SettingsDialog(QDialog):
         wifi_password = self._wifi_pass_input.text().strip()
         self.saved_settings = {
             'store_name': self._store_input.text().strip(),
+            'auth_mode': self._auth_mode_combo.currentData(),
             'api_key': self._api_key_input.text().strip(),
             'api_base_url': (self._url_input.text().strip()
                              or DEFAULTS['api_base_url']),
+            'oauth_authorize_url': self._settings.get('oauth_authorize_url', DEFAULTS['oauth_authorize_url']),
+            'oauth_token_url': self._settings.get('oauth_token_url', DEFAULTS['oauth_token_url']),
+            'oauth_client_id': self._oauth_client_id_input.text().strip(),
+            'oauth_client_secret': self._oauth_client_secret_input.text().strip(),
+            'oauth_redirect_uri': (
+                self._oauth_redirect_input.text().strip() or DEFAULTS['oauth_redirect_uri']
+            ),
+            'oauth_access_token': self._settings.get('oauth_access_token', ''),
+            'oauth_refresh_token': self._settings.get('oauth_refresh_token', ''),
+            'oauth_token_expires_at': self._settings.get('oauth_token_expires_at', ''),
             'tickets_per_page': self._settings.get(
                 'tickets_per_page', DEFAULTS['tickets_per_page']),
             'include_beta_updates': self._include_beta_updates_cb.isChecked(),
