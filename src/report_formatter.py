@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from assessments import assess_smart_status
-from settings import get_report_title
+from settings import APP_VERSION, get_report_title
 
 
 class ReportFormatter:
@@ -190,6 +190,8 @@ class ReportFormatter:
 
         if upload_title:
             lines.append(f"<strong style='font-size:11pt;'>{upload_title}</strong>")
+
+        lines.append(f"<strong>PC AutoSpec Version:</strong> {APP_VERSION}")
 
         tech_name = specs.get('_job_tech_name', '')
         if tech_name:
@@ -1523,11 +1525,21 @@ class ReportFormatter:
             lines.append("")
 
             # Capacity Information
-            if battery_details.get('design_capacity_wh'):
-                lines.append(f"<strong>Design Capacity:</strong> {battery_details['design_capacity_wh']}Wh ({battery_details.get('design_capacity_mah', 0):,} mAh)")
+            design_capacity = self._format_battery_capacity(
+                battery_details.get('design_capacity_mwh'),
+                battery_details.get('design_capacity_wh'),
+                battery_details.get('design_capacity_mah'),
+            )
+            if design_capacity:
+                lines.append(f"<strong>Design Capacity:</strong> {design_capacity}")
 
-            if battery_details.get('full_charge_capacity_wh'):
-                lines.append(f"<strong>Full Charge Capacity:</strong> {battery_details['full_charge_capacity_wh']}Wh ({battery_details.get('full_charge_capacity_mah', 0):,} mAh)")
+            full_charge_capacity = self._format_battery_capacity(
+                battery_details.get('full_charge_capacity_mwh'),
+                battery_details.get('full_charge_capacity_wh'),
+                battery_details.get('full_charge_capacity_mah'),
+            )
+            if full_charge_capacity:
+                lines.append(f"<strong>Full Charge Capacity:</strong> {full_charge_capacity}")
 
             if battery_details.get('health_percent'):
                 health = battery_details['health_percent']
@@ -1591,6 +1603,18 @@ class ReportFormatter:
 
         lines.append("")
         return lines
+
+    def _format_battery_capacity(self, capacity_mwh, capacity_wh, capacity_mah):
+        """Prefer watt-hour based battery capacities when available."""
+        if capacity_mwh:
+            if capacity_wh:
+                return f"{capacity_mwh:,} mWh ({capacity_wh} Wh)"
+            return f"{capacity_mwh:,} mWh"
+        if capacity_wh:
+            return f"{capacity_wh} Wh"
+        if capacity_mah:
+            return f"{capacity_mah:,} mAh"
+        return ""
 
     def _format_system_status(self, specs):
         """Format system status section with performance baselines"""
