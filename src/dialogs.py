@@ -1531,9 +1531,9 @@ class ReportPreviewDialog(QDialog):
         self._ticket_input.setPlaceholderText("e.g. 15108")
         self._ticket_input.setFixedHeight(34)
         self._ticket_input.setFixedWidth(160)
-        self._ticket_input.textChanged.connect(self._on_ticket_changed)
         if prefill_ticket:
             self._ticket_input.setText(prefill_ticket)
+        self._ticket_input.textChanged.connect(self._on_ticket_changed)
         fields_row.addWidget(self._ticket_input)
 
         fields_row.addStretch()
@@ -1847,6 +1847,8 @@ class ReportPreviewDialog(QDialog):
 
     def _update_upload_button(self):
         """Update the upload button text and style based on current state."""
+        if not hasattr(self, '_upload_btn'):
+            return
         has_key = is_configured()
         has_ticket = len(self._ticket_input.text().strip()) > 0
         btn_style = "border: none; border-radius: 8px; font-weight: bold; font-size: 14px;"
