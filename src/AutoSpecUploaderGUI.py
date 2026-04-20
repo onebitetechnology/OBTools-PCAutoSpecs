@@ -8,6 +8,7 @@ Version 1.0
 import sys
 import os
 import tempfile
+import time
 
 # ── Vendor path injection ──────────────────────────────────────────────
 # Adds the USB's vendor/ folder to sys.path so bundled packages (wmi, etc.)
@@ -160,7 +161,10 @@ class MainWindow(QMainWindow):
         self._lhm_launched = False
         self._lhm_wait_timer = None
         self._lhm_wait_deadline = None
+        self._lhm_warning_deadline = None
         self._lhm_warning_shown = False
+        self._lhm_retry_count = 0
+        self._lhm_last_launch_attempt = 0.0
         self._scan_in_progress = False
         self._startup_update_check_worker = None
         self._startup_update_download_worker = None
@@ -375,7 +379,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logging.warning(f"Could not patch LHM config: {e}")
 
-    def _start_lhm(self):
+    def _start_lhm(self, show_window=False):
         """Launch LibreHardwareMonitor silently for CPU temperature reading."""
         lhm_path = get_lhm_path()
         if not os.path.isfile(lhm_path):
@@ -408,7 +412,7 @@ class MainWindow(QMainWindow):
             import subprocess
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = 2  # SW_SHOWMINNOACTIVE — minimized, not focused
+            si.wShowWindow = 1 if show_window else 2  # normal if retrying after installer prompt
             self._lhm_process = subprocess.Popen(
                 [lhm_path],
                 stdout=subprocess.DEVNULL,
@@ -417,6 +421,7 @@ class MainWindow(QMainWindow):
             )
             logging.info(f"LibreHardwareMonitor launched minimized (PID {self._lhm_process.pid})")
             self._lhm_launched = True
+            self._lhm_last_launch_attempt = time.monotonic()
         except Exception as e:
             self._log_panel.append(
                 f"  ⚠ Could not launch LibreHardwareMonitor — "
@@ -424,6 +429,7 @@ class MainWindow(QMainWindow):
             logging.warning(f"Failed to launch LHM: {e}")
             self._lhm_process  = None
             self._lhm_launched = False
+            self._lhm_last_launch_attempt = time.monotonic()
 
     def _is_lhm_web_server_available(self):
         """True when LHM's local web server is already serving sensor data."""
@@ -528,7 +534,6 @@ class MainWindow(QMainWindow):
 
     def _begin_lhm_sensor_wait(self):
         """Poll for the LHM web server without blocking the UI."""
-        import time
         if self._is_lhm_web_server_available():
             logging.info("LHM web server already responding — CPU temp available")
             return
@@ -537,7 +542,10 @@ class MainWindow(QMainWindow):
             return
 
         self._lhm_warning_shown = False
-        self._lhm_wait_deadline = time.monotonic() + 20
+        self._lhm_retry_count = 0
+        now = time.monotonic()
+        self._lhm_warning_deadline = now + 12
+        self._lhm_wait_deadline = now + 90
         self._lhm_wait_timer = QTimer(self)
         self._lhm_wait_timer.setInterval(2000)
         self._lhm_wait_timer.timeout.connect(self._poll_lhm_sensor_ready)
@@ -547,8 +555,8 @@ class MainWindow(QMainWindow):
 
     def _poll_lhm_sensor_ready(self):
         """Background poll for LHM readiness so startup never gets stuck."""
-        import time
         import urllib.request
+        now = time.monotonic()
         try:
             req = urllib.request.Request(
                 "http://localhost:8085/data.json",
@@ -564,22 +572,40 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        if self._lhm_wait_deadline and time.monotonic() < self._lhm_wait_deadline:
-            return
+        if (
+            self._count_running_lhm_processes() == 0
+            and self._lhm_retry_count < 4
+            and (now - self._lhm_last_launch_attempt) >= 8
+        ):
+            self._lhm_retry_count += 1
+            logging.info(
+                f"LHM still not ready — retrying launch (attempt {self._lhm_retry_count}/4)"
+            )
+            self._start_lhm(show_window=self._lhm_warning_shown)
 
-        self._finish_lhm_sensor_wait()
-        logging.warning("LHM web server unavailable — CPU temp will be unreliable")
-        self._status_bar.showMessage("Temperature monitor unavailable — scan will continue")
-        if not self._lhm_warning_shown:
+        if (
+            not self._lhm_warning_shown
+            and self._lhm_warning_deadline
+            and now >= self._lhm_warning_deadline
+        ):
             self._lhm_warning_shown = True
             QMessageBox.warning(
                 self,
                 "Temperature Sensor Limited",
                 "LibreHardwareMonitor did not finish starting.\n\n"
                 "If a LibreHardwareMonitor or Pawn.io installer opened behind PC AutoSpec, "
-                "bring it forward and complete it.\n\n"
+                "bring it forward and complete it. PC AutoSpec will keep retrying automatically "
+                "for a little while after that.\n\n"
                 "The scan can still continue, but CPU temperature under load may be unavailable."
             )
+            return
+
+        if self._lhm_wait_deadline and now < self._lhm_wait_deadline:
+            return
+
+        self._finish_lhm_sensor_wait()
+        logging.warning("LHM web server unavailable — CPU temp will be unreliable")
+        self._status_bar.showMessage("Temperature monitor unavailable — scan will continue")
 
     def _finish_lhm_sensor_wait(self):
         """Stop any in-progress LHM readiness polling."""
@@ -588,6 +614,8 @@ class MainWindow(QMainWindow):
             self._lhm_wait_timer.deleteLater()
             self._lhm_wait_timer = None
         self._lhm_wait_deadline = None
+        self._lhm_warning_deadline = None
+        self._lhm_retry_count = 0
 
     def _show_startup_dialog(self):
         """Show the job setup startup dialog, then begin scan."""
