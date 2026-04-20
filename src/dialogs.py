@@ -2798,8 +2798,10 @@ class SettingsDialog(QDialog):
                 'supported': True,
                 'available': True,
                 'downloaded': True,
+                'package_path': pending.get('package_path') or pending.get('installer_path'),
                 'latest_version': pending.get('version'),
                 'installer_path': pending.get('installer_path'),
+                'package_kind': pending.get('package_kind', 'installer'),
                 'message': (
                     f"Update {pending.get('version')} has already been downloaded. "
                     "Use Install Update Now to apply it."
@@ -2880,7 +2882,9 @@ class SettingsDialog(QDialog):
             'supported': True,
             'available': True,
             'downloaded': True,
+            'package_path': result.get('package_path') or result.get('installer_path'),
             'installer_path': result.get('installer_path'),
+            'package_kind': result.get('package_kind') or self._update_info.get('package_kind'),
             'latest_version': result.get('version') or self._update_info.get('latest_version'),
             'message': result.get('message', 'Update downloaded.'),
         })
@@ -2897,17 +2901,29 @@ class SettingsDialog(QDialog):
         self._refresh_update_buttons()
 
     def _on_install_update(self):
-        installer_path = self._update_info.get('installer_path')
-        if not installer_path:
+        package_path = self._update_info.get('package_path') or self._update_info.get('installer_path')
+        package_kind = str(self._update_info.get('package_kind') or 'installer')
+        if not package_path:
             return
 
+        if package_kind == 'portable':
+            prompt = (
+                "The downloaded portable update will replace the app files in the folder "
+                "PC AutoSpec is currently running from after the app closes.\n\n"
+                "It will not register PC AutoSpec as an installed app on this machine.\n\n"
+                "Save any work first, then continue."
+            )
+        else:
+            prompt = (
+                "The downloaded installer will open after PC AutoSpec closes.\n\n"
+                "It will prefill the folder PC AutoSpec is currently running from,\n"
+                "so USB updates stay on the USB by default.\n\n"
+                "Save any work first, then continue."
+            )
         box = _make_msgbox(
             self,
             "Install Update",
-            "The downloaded installer will open after PC AutoSpec closes.\n\n"
-            "It will prefill the folder PC AutoSpec is currently running from,\n"
-            "so USB updates stay on the USB by default.\n\n"
-            "Save any work first, then continue.",
+            prompt,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -2915,9 +2931,9 @@ class SettingsDialog(QDialog):
             return
 
         try:
-            launch_pending_update(installer_path)
+            launch_pending_update(package_path)
         except Exception as e:
-            self._set_update_status(f"Could not launch installer: {e}", COLORS['error'])
+            self._set_update_status(f"Could not launch update: {e}", COLORS['error'])
             return
 
         self.accept()

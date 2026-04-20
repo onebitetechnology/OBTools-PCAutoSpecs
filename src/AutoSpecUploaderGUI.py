@@ -1062,7 +1062,9 @@ class MainWindow(QMainWindow):
 
         self._startup_update_prompt_shown = True
 
-        if self._startup_update_info.get('downloaded') and self._startup_update_info.get('installer_path'):
+        if self._startup_update_info.get('downloaded') and (
+            self._startup_update_info.get('package_path') or self._startup_update_info.get('installer_path')
+        ):
             self._prompt_install_ready_update()
             return
 
@@ -1092,7 +1094,9 @@ class MainWindow(QMainWindow):
             return
 
         self._status_bar.showMessage("Downloading app update...")
-        self._log_panel.append("  App update available — downloading installer...\n", 'info')
+        package_kind = str((self._startup_update_info or {}).get('package_kind') or 'installer')
+        package_label = "portable update package" if package_kind == "portable" else "installer"
+        self._log_panel.append(f"  App update available — downloading {package_label}...\n", 'info')
         self._startup_update_download_worker = UpdateDownloadWorker(
             dict(self._startup_update_info), self)
         self._startup_update_download_worker.progress.connect(
@@ -1112,7 +1116,9 @@ class MainWindow(QMainWindow):
         self._startup_update_info.update({
             'available': True,
             'downloaded': True,
+            'package_path': result.get('package_path') or result.get('installer_path'),
             'installer_path': result.get('installer_path'),
+            'package_kind': result.get('package_kind') or self._startup_update_info.get('package_kind'),
             'latest_version': result.get('version') or self._startup_update_info.get('latest_version'),
             'message': result.get('message', 'Update downloaded and ready to install.'),
         })
@@ -1128,19 +1134,33 @@ class MainWindow(QMainWindow):
         self._log_panel.append(f"  Update download failed: {message}\n", 'error')
 
     def _prompt_install_ready_update(self):
-        installer_path = self._startup_update_info.get('installer_path') if self._startup_update_info else None
-        if not installer_path:
+        package_path = self._startup_update_info.get('package_path') if self._startup_update_info else None
+        if not package_path and self._startup_update_info:
+            package_path = self._startup_update_info.get('installer_path')
+        package_kind = str((self._startup_update_info or {}).get('package_kind') or 'installer')
+        if not package_path:
             return
 
         latest = self._startup_update_info.get('latest_version') or 'Unknown'
+        if package_kind == 'portable':
+            message = (
+                f"PC AutoSpec {latest} is ready to apply.\n\n"
+                "The portable update will replace the app files on the USB after PC AutoSpec closes.\n"
+                "It will not register PC AutoSpec as an installed app on this machine.\n"
+                "Apply it now?"
+            )
+        else:
+            message = (
+                f"PC AutoSpec {latest} is ready to install.\n\n"
+                "The installer will open after PC AutoSpec closes.\n"
+                "It will prefill the folder PC AutoSpec is currently running from,\n"
+                "so USB updates stay on the USB by default.\n"
+                "Install it now?"
+            )
         box = _make_msgbox(
             self,
             "Install Update",
-            f"PC AutoSpec {latest} is ready to install.\n\n"
-            "The installer will open after PC AutoSpec closes.\n"
-            "It will prefill the folder PC AutoSpec is currently running from,\n"
-            "so USB updates stay on the USB by default.\n"
-            "Install it now?",
+            message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -1155,13 +1175,13 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            launch_pending_update(installer_path)
+            launch_pending_update(package_path)
         except Exception as e:
             logging.error(f"Could not launch downloaded update: {e}", exc_info=True)
             QMessageBox.critical(
                 self,
                 "Update Failed",
-                f"Could not launch the installer:\n\n{e}",
+                f"Could not launch the update:\n\n{e}",
             )
             return
 

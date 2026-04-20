@@ -1,8 +1,8 @@
 """
 PC AutoSpec — GitHub release updater.
 
-Checks the latest GitHub Release, downloads the Windows installer, and
-launches it after the app exits.
+Checks the latest GitHub Release, downloads the appropriate Windows update
+package, and launches/applies it after the app exits.
 """
 
 from __future__ import annotations
@@ -28,11 +28,71 @@ GITHUB_RELEASES_URL = (
     f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases"
 )
 INSTALLER_ASSET_NAME = "PCAutoSpec-Setup.exe"
+PORTABLE_ASSET_NAME = "PCAutoSpec-portable.zip"
 
 
 def is_update_supported() -> bool:
     """Return True when update download/apply is supported."""
     return sys.platform == "win32"
+
+
+def _is_running_from_removable_location() -> bool:
+    """Best-effort check for a USB/removable install location."""
+    if sys.platform != "win32":
+        return False
+
+    app_dir = get_app_dir()
+    drive, _ = os.path.splitdrive(app_dir)
+    if not drive:
+        return False
+
+    try:
+        creationflags = 0
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            creationflags |= subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                (
+                    f"$logical = Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='{drive}'\" "
+                    "-ErrorAction SilentlyContinue; "
+                    "if (-not $logical) { return }; "
+                    "$partition = @(Get-CimAssociatedInstance -InputObject $logical "
+                    "-ResultClassName Win32_DiskPartition -ErrorAction SilentlyContinue)[0]; "
+                    "$disk = $null; "
+                    "if ($partition) { "
+                    "$disk = @(Get-CimAssociatedInstance -InputObject $partition "
+                    "-ResultClassName Win32_DiskDrive -ErrorAction SilentlyContinue)[0] "
+                    "}; "
+                    "[PSCustomObject]@{ "
+                    "DriveType = [string]$logical.DriveType; "
+                    "InterfaceType = if ($disk) { $disk.InterfaceType } else { '' }; "
+                    "Model = if ($disk) { $disk.Model } else { '' }; "
+                    "PNPDeviceID = if ($disk) { $disk.PNPDeviceID } else { '' } "
+                    "} | ConvertTo-Json -Compress"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=creationflags,
+        )
+        payload = json.loads(result.stdout.strip()) if result.stdout.strip() else {}
+        drive_type = str(payload.get("DriveType", "")).strip()
+        interface_type = str(payload.get("InterfaceType", "")).upper()
+        model = str(payload.get("Model", "")).upper()
+        pnp_id = str(payload.get("PNPDeviceID", "")).upper()
+        return (
+            drive_type == "2"
+            or "USB" in interface_type
+            or pnp_id.startswith("USB")
+            or "USB" in model
+        )
+    except Exception as e:
+        logging.debug(f"Could not detect removable install location: {e}")
+        return False
 
 
 def _normalize_version(version: str) -> str:
@@ -127,14 +187,17 @@ def get_pending_update() -> Optional[Dict]:
         logging.debug(f"Failed to read pending update metadata: {e}")
         return None
 
-    installer_path = Path(metadata.get("installer_path", ""))
+    package_path = Path(metadata.get("package_path") or metadata.get("installer_path", ""))
     pending_version = _normalize_version(metadata.get("version"))
-    if (not installer_path.is_file()
+    if (not package_path.is_file()
             or not pending_version
             or _version_key(pending_version) <= _version_key(APP_VERSION)):
         _clear_pending_metadata()
         return None
 
+    metadata["package_path"] = str(package_path)
+    metadata["installer_path"] = str(package_path)
+    metadata.setdefault("package_kind", "installer")
     return metadata
 
 
@@ -145,6 +208,17 @@ def _select_installer_asset(release_data: Dict) -> Optional[Dict]:
     for asset in release_data.get("assets", []):
         name = str(asset.get("name", ""))
         if name.lower().endswith(".exe") and "setup" in name.lower():
+            return asset
+    return None
+
+
+def _select_portable_asset(release_data: Dict) -> Optional[Dict]:
+    for asset in release_data.get("assets", []):
+        if asset.get("name") == PORTABLE_ASSET_NAME:
+            return asset
+    for asset in release_data.get("assets", []):
+        name = str(asset.get("name", ""))
+        if name.lower().endswith(".zip") and "portable" in name.lower():
             return asset
     return None
 
@@ -164,6 +238,8 @@ def check_for_updates(include_prereleases: Optional[bool] = None, timeout: int =
         "message": "Update checks are idle.",
         "release_notes": "",
         "installer_path": None,
+        "package_path": None,
+        "package_kind": "installer",
         "download_url": None,
         "html_url": None,
         "published_at": None,
@@ -182,7 +258,9 @@ def check_for_updates(include_prereleases: Optional[bool] = None, timeout: int =
                 "latest_version": pending_version,
                 "available": True,
                 "downloaded": True,
-                "installer_path": pending.get("installer_path"),
+                "installer_path": pending.get("package_path") or pending.get("installer_path"),
+                "package_path": pending.get("package_path") or pending.get("installer_path"),
+                "package_kind": pending.get("package_kind", "installer"),
                 "message": (
                     f"Update {pending_version} has already been downloaded. "
                     "Use Install Update Now to apply it."
@@ -215,7 +293,13 @@ def check_for_updates(include_prereleases: Optional[bool] = None, timeout: int =
         release_data.get("tag_name") or release_data.get("name") or ""
     )
     release_notes = str(release_data.get("body") or "").strip()
-    installer_asset = _select_installer_asset(release_data)
+    use_portable_package = _is_running_from_removable_location()
+    package_kind = "portable" if use_portable_package else "installer"
+    package_asset = (
+        _select_portable_asset(release_data)
+        if use_portable_package
+        else _select_installer_asset(release_data)
+    )
 
     state.update({
         "latest_version": latest_version or None,
@@ -246,15 +330,17 @@ def check_for_updates(include_prereleases: Optional[bool] = None, timeout: int =
         return state
 
     state["available"] = True
-    if not installer_asset:
+    if not package_asset:
+        package_label = "portable ZIP" if use_portable_package else "Windows installer"
         state["message"] = (
-            f"Update {latest_version} is available, but no Windows installer "
+            f"Update {latest_version} is available, but no {package_label} "
             "asset was found on the latest GitHub Release."
         )
         return state
 
-    state["download_url"] = installer_asset.get("browser_download_url")
-    if state["downloaded"] and state["installer_path"]:
+    state["download_url"] = package_asset.get("browser_download_url")
+    state["package_kind"] = package_kind
+    if state["downloaded"] and (state["package_path"] or state["installer_path"]):
         state["message"] = (
             f"Update {latest_version} has already been downloaded. "
             "Use Install Update Now to apply it."
@@ -271,18 +357,24 @@ def download_update(
     progress_callback: Optional[Callable[[int, str], None]] = None,
     timeout: int = 60,
 ) -> Dict:
-    """Download the latest installer to a local update cache."""
+    """Download the latest update package to a local update cache."""
     if not is_update_supported():
         raise RuntimeError("Automatic update download is supported on Windows only.")
 
     download_url = update_info.get("download_url")
     latest_version = _normalize_version(update_info.get("latest_version"))
+    package_kind = str(update_info.get("package_kind") or "installer")
     if not download_url or not latest_version:
         raise RuntimeError("No downloadable update is available.")
 
     download_dir = _download_root()
-    installer_path = download_dir / f"PCAutoSpec-Setup-{latest_version}.exe"
-    temp_path = installer_path.with_suffix(".download")
+    package_name = (
+        f"PCAutoSpec-portable-{latest_version}.zip"
+        if package_kind == "portable"
+        else f"PCAutoSpec-Setup-{latest_version}.exe"
+    )
+    package_path = download_dir / package_name
+    temp_path = package_path.with_suffix(".download")
 
     if progress_callback:
         progress_callback(0, f"Starting download for version {latest_version}...")
@@ -307,24 +399,29 @@ def download_update(
                         message = f"Downloading update... {downloaded // 1024} KB"
                     progress_callback(percent, message)
 
-    temp_path.replace(installer_path)
+    temp_path.replace(package_path)
     metadata = {
         "version": latest_version,
-        "installer_path": str(installer_path),
+        "package_path": str(package_path),
+        "installer_path": str(package_path),
+        "package_kind": package_kind,
         "downloaded_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     _save_pending_metadata(metadata)
 
+    package_label = "Portable update" if package_kind == "portable" else "Update"
     return {
         "version": latest_version,
-        "installer_path": str(installer_path),
-        "message": f"Update {latest_version} downloaded and ready to install.",
+        "package_path": str(package_path),
+        "installer_path": str(package_path),
+        "package_kind": package_kind,
+        "message": f"{package_label} {latest_version} downloaded and ready to install.",
     }
 
 
-def launch_pending_update(installer_path: str, install_dir: Optional[str] = None) -> None:
+def launch_pending_update(package_path: str, install_dir: Optional[str] = None) -> None:
     """
-    Launch the installer after the app exits.
+    Launch the update package after the app exits.
 
     Uses a temporary cmd script so the installer starts after the current
     process has had time to shut down and release any file locks.
@@ -332,26 +429,64 @@ def launch_pending_update(installer_path: str, install_dir: Optional[str] = None
     if sys.platform != "win32":
         raise RuntimeError("Install update is only supported on Windows.")
 
-    installer = Path(installer_path)
-    if not installer.is_file():
-        raise RuntimeError("Downloaded installer file was not found.")
+    package = Path(package_path)
+    if not package.is_file():
+        raise RuntimeError("Downloaded update package file was not found.")
 
     if install_dir is None:
         install_dir = get_app_dir()
 
-    install_dir = str(Path(install_dir).resolve()) if install_dir else ""
-    installer_cmd = f'start "" "{installer}"'
-    if install_dir:
-        installer_cmd += f' /DIR="{install_dir}"'
-
     launcher_script = _download_root() / "launch-update.cmd"
-    launcher_script.write_text(
-        "@echo off\n"
-        "ping 127.0.0.1 -n 3 > nul\n"
-        f"{installer_cmd}\n"
-        'del "%~f0"\n',
-        encoding="utf-8",
-    )
+    install_dir = str(Path(install_dir).resolve()) if install_dir else ""
+
+    if package.suffix.lower() == ".zip":
+        if not install_dir:
+            raise RuntimeError("Portable updates require a target folder.")
+
+        staging_dir = _download_root() / "portable-staging"
+        zip_path = str(package).replace("'", "''")
+        dest_path = install_dir.replace("'", "''")
+        stage_path = str(staging_dir).replace("'", "''")
+        powershell_cmd = (
+            "$ErrorActionPreference = 'Stop'; "
+            "Start-Sleep -Seconds 2; "
+            f"$zip = '{zip_path}'; "
+            f"$dest = '{dest_path}'; "
+            f"$stage = '{stage_path}'; "
+            "if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }; "
+            "New-Item -ItemType Directory -Path $stage | Out-Null; "
+            "Expand-Archive -Path $zip -DestinationPath $stage -Force; "
+            "$exclude = @('settings.json','logs'); "
+            "Get-ChildItem -Path $stage -Force | ForEach-Object { "
+            "if ($exclude -contains $_.Name) { return }; "
+            "$target = Join-Path $dest $_.Name; "
+            "if ($_.PSIsContainer) { "
+            "if (Test-Path $target) { Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue }; "
+            "Move-Item $_.FullName $target -Force "
+            "} else { "
+            "Move-Item $_.FullName $target -Force "
+            "} "
+            "}; "
+            "Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue"
+        )
+        launcher_script.write_text(
+            "@echo off\n"
+            "ping 127.0.0.1 -n 3 > nul\n"
+            f"powershell -NoProfile -ExecutionPolicy Bypass -Command \"{powershell_cmd}\"\n"
+            'del "%~f0"\n',
+            encoding="utf-8",
+        )
+    else:
+        installer_cmd = f'start "" "{package}"'
+        if install_dir:
+            installer_cmd += f' /DIR="{install_dir}"'
+        launcher_script.write_text(
+            "@echo off\n"
+            "ping 127.0.0.1 -n 3 > nul\n"
+            f"{installer_cmd}\n"
+            'del "%~f0"\n',
+            encoding="utf-8",
+        )
 
     creationflags = 0
     if hasattr(subprocess, "CREATE_NO_WINDOW"):
