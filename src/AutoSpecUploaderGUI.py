@@ -855,20 +855,42 @@ class MainWindow(QMainWindow):
         specs_with_context = self._build_specs_with_context()
 
         formatter = ReportFormatter()
-        issues = formatter._get_critical_issues_list(specs_with_context)
+        try:
+            issues = formatter._get_critical_issues_list(specs_with_context)
 
-        logging.info("Generating report preview")
+            logging.info("Generating report preview")
 
-        # Show scan summary / upload dialog
-        dlg = ReportPreviewDialog(
-            specs_with_context, formatter, issues=issues, parent=self,
-            prefill_ticket=self._job_ticket_id,
-            prefill_tech_name=self._job_tech_name,
-            prefill_notes=self._job_tech_notes,
-            ticket_already_confirmed=bool(self._job_ticket_info),
-            initial_upload_scope=self._job_upload_scope,
-        )
-        if dlg.exec() != ReportPreviewDialog.Accepted:
+            # Show scan summary / upload dialog
+            dlg = ReportPreviewDialog(
+                specs_with_context, formatter, issues=issues, parent=self,
+                prefill_ticket=self._job_ticket_id,
+                prefill_tech_name=self._job_tech_name,
+                prefill_notes=self._job_tech_notes,
+                ticket_already_confirmed=bool(self._job_ticket_info),
+                initial_upload_scope=self._job_upload_scope,
+            )
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+
+            def _bring_preview_to_front():
+                try:
+                    dlg.showNormal()
+                except Exception:
+                    pass
+                dlg.raise_()
+                dlg.activateWindow()
+
+            QTimer.singleShot(0, _bring_preview_to_front)
+            result = dlg.exec()
+        except Exception as e:
+            logging.error(f"Failed to open report preview: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Preview Error",
+                f"PC AutoSpec could not open the Scan Summary / Upload dialog.\n\n{e}",
+            )
+            return
+
+        if result != ReportPreviewDialog.Accepted:
             logging.info("User closed preview without uploading")
             return
 
