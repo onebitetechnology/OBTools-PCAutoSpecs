@@ -1161,8 +1161,9 @@ class ReportFormatter:
             size_gb = drive.get('size_gb', 0)
 
             drive_type = self._classify_drive_type(drive)
+            model_upper = str(model).upper()
 
-            drive_label = f"{model} ({drive_type})" if drive_type and drive_type.upper() not in m_upper else model
+            drive_label = f"{model} ({drive_type})" if drive_type and drive_type.upper() not in model_upper else model
             lines.append(f"<strong>Drive {drive_num}: {drive_label}</strong>")
             drive_num += 1
             if size_gb:
