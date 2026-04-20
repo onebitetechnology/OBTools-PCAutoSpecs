@@ -158,6 +158,9 @@ class MainWindow(QMainWindow):
         self._gpu_worker = None
         self._lhm_process = None  # LibreHardwareMonitor subprocess
         self._lhm_launched = False
+        self._lhm_wait_timer = None
+        self._lhm_wait_deadline = None
+        self._lhm_warning_shown = False
         self._scan_in_progress = False
         self._startup_update_check_worker = None
         self._startup_update_download_worker = None
@@ -290,11 +293,11 @@ class MainWindow(QMainWindow):
             self._start_startup_update_check()
             self._start_lhm()
             self._ensure_wifi()
+            self._show_startup_dialog()
             if self._lhm_launched or self._is_lhm_web_server_available() or self._count_running_lhm_processes() > 0:
-                self._check_temp_sensor()
+                self._begin_lhm_sensor_wait()
             else:
                 logging.info("LHM not launched — skipping temp sensor wait")
-            self._show_startup_dialog()
         except Exception as e:
             logging.error(f"Deferred startup error: {e}", exc_info=True)
             self._show_startup_dialog()
@@ -523,44 +526,68 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logging.warning(f"USB eject failed: {e}")
 
-    def _check_temp_sensor(self):
-        """
-        Wait for LHM web server to come up before proceeding.
-        Polls for up to 90 seconds — processes Qt events each cycle
-        to keep the UI responsive. Only warns if LHM never responds.
-        """
+    def _begin_lhm_sensor_wait(self):
+        """Poll for the LHM web server without blocking the UI."""
+        import time
+        if self._is_lhm_web_server_available():
+            logging.info("LHM web server already responding — CPU temp available")
+            return
+
+        if self._lhm_wait_timer is not None:
+            return
+
+        self._lhm_warning_shown = False
+        self._lhm_wait_deadline = time.monotonic() + 20
+        self._lhm_wait_timer = QTimer(self)
+        self._lhm_wait_timer.setInterval(2000)
+        self._lhm_wait_timer.timeout.connect(self._poll_lhm_sensor_ready)
+        self._lhm_wait_timer.start()
+        logging.info("Polling for LHM web server in the background...")
+        self._status_bar.showMessage("Starting temperature monitor...")
+
+    def _poll_lhm_sensor_ready(self):
+        """Background poll for LHM readiness so startup never gets stuck."""
         import time
         import urllib.request
-        from PySide6.QtWidgets import QApplication
+        try:
+            req = urllib.request.Request(
+                "http://localhost:8085/data.json",
+                headers={"User-Agent": "PCAutoSpec"})
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                import json
+                data = json.loads(resp.read().decode('utf-8'))
+                if data.get('Children'):
+                    logging.info("LHM web server responding — CPU temp available")
+                    self._finish_lhm_sensor_wait()
+                    self._status_bar.showMessage("Temperature monitor ready")
+                    return
+        except Exception:
+            pass
 
-        logging.info("Waiting for LHM web server...")
-        deadline = time.monotonic() + 90  # generous timeout for first-run installs
+        if self._lhm_wait_deadline and time.monotonic() < self._lhm_wait_deadline:
+            return
 
-        while time.monotonic() < deadline:
-            QApplication.processEvents()  # keep UI alive during polling
-            try:
-                req = urllib.request.Request(
-                    "http://localhost:8085/data.json",
-                    headers={"User-Agent": "PCAutoSpec"})
-                with urllib.request.urlopen(req, timeout=2) as resp:
-                    import json
-                    data = json.loads(resp.read().decode('utf-8'))
-                    if data.get('Children'):
-                        logging.info("LHM web server responding — CPU temp available")
-                        return  # Good to go
-            except Exception:
-                pass
-            time.sleep(2)
-
-        # Still not up after 90s — warn and continue anyway
+        self._finish_lhm_sensor_wait()
         logging.warning("LHM web server unavailable — CPU temp will be unreliable")
-        QMessageBox.warning(
-            self,
-            "Temperature Sensor Limited",
-            "LibreHardwareMonitor did not start correctly.\n\n"
-            "CPU temperature under load may be inaccurate or unavailable.\n\n"
-            "The scan will continue normally."
-        )
+        self._status_bar.showMessage("Temperature monitor unavailable — scan will continue")
+        if not self._lhm_warning_shown:
+            self._lhm_warning_shown = True
+            QMessageBox.warning(
+                self,
+                "Temperature Sensor Limited",
+                "LibreHardwareMonitor did not finish starting.\n\n"
+                "If a LibreHardwareMonitor or Pawn.io installer opened behind PC AutoSpec, "
+                "bring it forward and complete it.\n\n"
+                "The scan can still continue, but CPU temperature under load may be unavailable."
+            )
+
+    def _finish_lhm_sensor_wait(self):
+        """Stop any in-progress LHM readiness polling."""
+        if self._lhm_wait_timer is not None:
+            self._lhm_wait_timer.stop()
+            self._lhm_wait_timer.deleteLater()
+            self._lhm_wait_timer = None
+        self._lhm_wait_deadline = None
 
     def _show_startup_dialog(self):
         """Show the job setup startup dialog, then begin scan."""
@@ -720,9 +747,14 @@ class MainWindow(QMainWindow):
         if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW and self._job_ticket_id:
             QTimer.singleShot(350, self._quick_upload_system_overview)
         else:
-            # Auto-open the results/upload dialog after a short delay
-            # (delay lets the UI repaint and GPU monitor start first)
-            QTimer.singleShot(600, self._on_preview)
+            # Leave the app in a ready state after a full scan so external
+            # machine popups/installers cannot trap PC AutoSpec behind a
+            # modal upload dialog. The tech can review/upload when ready.
+            self._status_bar.showMessage("Scan complete — click Scan Summary / Upload when ready")
+            self._log_panel.append(
+                "  Scan complete — review results and upload when ready\n",
+                'info'
+            )
         self._maybe_prompt_for_update()
 
     def _on_specs_error(self, error_msg):
