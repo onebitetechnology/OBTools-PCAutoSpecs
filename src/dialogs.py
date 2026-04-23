@@ -38,6 +38,8 @@ from repairdesk_api import RepairDeskAPI
 from updater import get_pending_update, launch_pending_update
 from workers import UpdateCheckWorker, UpdateDownloadWorker
 
+README_FILENAME = "PC AutoSpec Read Me.md"
+
 
 
 # ─── QMessageBox light-theme helper ─────────────────────────────────
@@ -2498,6 +2500,25 @@ class SettingsDialog(QDialog):
 
         updates_layout.addLayout(btns_row)
 
+        readme_row = QHBoxLayout()
+        readme_row.setSpacing(8)
+
+        self._readme_btn = QPushButton("Open Read Me")
+        self._readme_btn.setObjectName("secondary")
+        self._readme_btn.setCursor(Qt.PointingHandCursor)
+        self._readme_btn.clicked.connect(self._open_readme)
+        readme_row.addWidget(self._readme_btn, 0)
+
+        readme_hint = QLabel(
+            "Open the local user guide with scan instructions, button explanations, and test details."
+        )
+        readme_hint.setWordWrap(True)
+        readme_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9pt; border: none;")
+        readme_row.addWidget(readme_hint, 1)
+
+        updates_layout.addLayout(readme_row)
+
         feedback_row = QHBoxLayout()
         feedback_row.setSpacing(8)
 
@@ -2632,6 +2653,30 @@ class SettingsDialog(QDialog):
             QMessageBox.StandardButton.Ok,
         )
         QApplication.clipboard().setText(f"Subject: {subject}\n\n{body}")
+        fallback.exec()
+
+    def _get_readme_path(self):
+        candidates = [
+            Path(get_app_dir()) / README_FILENAME,
+            Path(get_app_dir()) / "README.md",
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _open_readme(self):
+        readme_path = self._get_readme_path()
+        if readme_path and QDesktopServices.openUrl(QUrl.fromLocalFile(str(readme_path))):
+            return
+
+        fallback = _make_msgbox(
+            self,
+            "Read Me Not Found",
+            "PC AutoSpec could not find the local Read Me file in the app folder.",
+            QMessageBox.StandardButton.Ok,
+            QMessageBox.StandardButton.Ok,
+        )
         fallback.exec()
 
     def _sync_wifi_card_toggle(self):

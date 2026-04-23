@@ -187,14 +187,13 @@ class ReportFormatter:
     def _get_report_meta_lines(self, specs, upload_title):
         """Shared header lines for both overview and full uploads."""
         lines = []
-
-        if upload_title:
-            lines.append(f"<strong style='font-size:11pt;'>{upload_title}</strong>")
-
-        lines.append(f"<strong>PC AutoSpec Version:</strong> {APP_VERSION}")
-
         tech_name = specs.get('_job_tech_name', '')
-        if tech_name:
+        if upload_title:
+            summary_line = f"<strong>{upload_title}</strong>: PC AutoSpec Version {APP_VERSION}"
+            if tech_name:
+                summary_line += f". Uploaded by: {tech_name}"
+            lines.append(summary_line)
+        elif tech_name:
             lines.append(f"<strong>Uploaded by:</strong> {tech_name}")
 
         return lines
@@ -202,19 +201,15 @@ class ReportFormatter:
     def _format_overview_only_note(self, specs):
         """Short upload for routine tickets."""
         lines = self._get_report_meta_lines(specs, "System Overview")
-
-        lines.append(
-            f"<strong>Current OS Version:</strong> {self._format_current_os_version(specs)}"
-        )
-        lines.append(f"<strong>CPU:</strong> {self._extract_cpu_model(specs)}")
-        lines.append(f"<strong>RAM:</strong> {self._summarize_ram_overview(specs)}")
-
-        drive_information = self._build_storage_overview(specs)
-        lines.append(f"<strong>Drive Information:</strong> {drive_information}")
+        lines.extend(self._build_compact_system_overview_lines(specs))
         lines.append("")
         return lines
 
     def _format_current_os_version(self, specs):
+        os_name = specs.get('OS', '')
+        if os_name and os_name != 'Unknown':
+            return os_name
+
         windows_details = specs.get('WindowsDetails', '')
         if isinstance(windows_details, str) and windows_details:
             details = {}
@@ -227,6 +222,40 @@ class ReportFormatter:
                 return details['Edition']
 
         return specs.get('OS', 'Unknown')
+
+    def _build_compact_system_overview_lines(self, specs):
+        """Compact top summary used by both overview-only and full reports."""
+        lines = ["<strong>System Overview</strong>"]
+        lines.append(f"<strong>Model:</strong> {self._extract_model_display(specs)}")
+        lines.append(f"<strong>Serial Number:</strong> {self._extract_serial_display(specs)}")
+        lines.append(
+            f"<strong>Current OS Version:</strong> {self._format_current_os_version(specs)}"
+        )
+        lines.append(f"<strong>CPU:</strong> {self._extract_cpu_model(specs)}")
+        lines.append(f"<strong>RAM:</strong> {self._summarize_ram_overview(specs)}")
+        lines.append(f"<strong>Drive Information:</strong> {self._build_storage_overview(specs)}")
+        return lines
+
+    def _extract_model_display(self, specs):
+        laptop_model = specs.get('LaptopModel', 'Not Available')
+        screen_size = specs.get('ScreenSize')
+        desktop_type = specs.get('DesktopType', '')
+        system_type = specs.get('SystemType', 'Unknown')
+
+        if laptop_model and laptop_model != 'Not Available':
+            model_text = laptop_model
+            if screen_size:
+                model_text += f" ({screen_size})"
+            return model_text
+        if desktop_type and desktop_type != 'None':
+            return desktop_type
+        if system_type == 'Desktop':
+            return 'Custom Build'
+        return 'Not detected'
+
+    def _extract_serial_display(self, specs):
+        serial = specs.get('SerialNumber', '')
+        return serial if serial and serial != 'N/A' else 'Not detected'
 
     def _extract_cpu_model(self, specs):
         cpu_raw = specs.get('CPU', 'Unknown CPU')
@@ -270,14 +299,9 @@ class ReportFormatter:
             for line in storage_text.split('\n'):
                 line = line.strip()
                 if line:
-                    drive_type = None if self._line_already_has_drive_type(line) else self._classify_drive_type_from_storage_health(
-                        line, storage_health
-                    )
-                    if not drive_type and not self._line_already_has_drive_type(line):
-                        drive_type = self._classify_drive_type_from_line(line)
-                    if drive_type:
-                        line += f" ({drive_type})"
-                    usage_lines.append(line)
+                    summary_line = self._summarize_storage_line(line, storage_health)
+                    if summary_line:
+                        usage_lines.append(summary_line)
             if usage_lines:
                 return '; '.join(usage_lines)
 
@@ -297,6 +321,91 @@ class ReportFormatter:
             return ', '.join(type_counts)
 
         return 'Unknown'
+
+    def _summarize_storage_line(self, line, storage_health):
+        match = re.match(
+            r'Drive\s+([A-Z]):\s*([\d.]+)\s*(GB|TB)\s+total,\s*([\d.]+)\s*GB\s+free\s*\(([\d.]+)%\s+used\)\s*(?:-\s*(.+))?$',
+            line,
+            re.IGNORECASE,
+        )
+        if not match:
+            return line
+
+        drive_letter = match.group(1).upper()
+        total_value = float(match.group(2))
+        total_unit = match.group(3).upper()
+        free_gb = float(match.group(4))
+        descriptor = (match.group(6) or "").strip()
+
+        total_gb = total_value * 1000 if total_unit == 'TB' else total_value
+        used_gb = max(0.0, total_gb - free_gb)
+
+        drive_type = None if self._line_already_has_drive_type(descriptor) else self._classify_drive_type_from_storage_health(
+            line, storage_health
+        )
+        if not drive_type and not self._line_already_has_drive_type(descriptor):
+            drive_type = self._classify_drive_type_from_line(descriptor)
+        if drive_type:
+            descriptor = f"{descriptor} ({drive_type})" if descriptor else drive_type
+
+        total_display = self._format_friendly_drive_total(total_gb, descriptor)
+        used_display = self._format_capacity_value(used_gb)
+        if descriptor:
+            return f"{drive_letter}: {total_display}/{used_display} Used - {descriptor}"
+        return f"{drive_letter}: {total_display}/{used_display} Used"
+
+    def _format_friendly_drive_total(self, total_gb, descriptor=""):
+        descriptor = descriptor or ""
+        size_match = re.search(r'(\d+(?:\.\d+)?)\s*(TB|GB)\b', descriptor, re.IGNORECASE)
+        if size_match:
+            value = float(size_match.group(1))
+            unit = size_match.group(2).upper()
+            if unit == 'TB':
+                return f"{self._trim_decimal(value)}TB"
+            return f"{self._trim_decimal(value)}GB"
+
+        observed_to_marketed = [
+            (14.9, "16GB"),
+            (29.8, "32GB"),
+            (59.6, "64GB"),
+            (111.8, "120GB"),
+            (119.2, "128GB"),
+            (149.0, "160GB"),
+            (167.6, "180GB"),
+            (223.5, "240GB"),
+            (232.8, "250GB"),
+            (238.5, "256GB"),
+            (447.1, "480GB"),
+            (465.7, "500GB"),
+            (476.9, "512GB"),
+            (698.6, "750GB"),
+            (931.5, "1TB"),
+            (1863.0, "2TB"),
+            (2794.0, "3TB"),
+            (3726.0, "4TB"),
+            (7452.0, "8TB"),
+        ]
+        closest_actual, closest_label = min(
+            observed_to_marketed,
+            key=lambda item: abs(item[0] - total_gb),
+        )
+        if abs(closest_actual - total_gb) <= max(4.0, closest_actual * 0.12):
+            return closest_label
+
+        return f"{self._trim_decimal(total_gb)}GB"
+
+    def _format_capacity_value(self, amount_gb):
+        if amount_gb >= 1000:
+            return f"{self._trim_decimal(amount_gb / 1000)}TB"
+        return f"{self._trim_decimal(amount_gb, keep_two_decimals=True)}GB"
+
+    @staticmethod
+    def _trim_decimal(value, keep_two_decimals=False):
+        if keep_two_decimals:
+            text = f"{value:.2f}"
+        else:
+            text = f"{value:.1f}"
+        return text.rstrip('0').rstrip('.')
 
     @staticmethod
     def _classify_drive_type(drive):
@@ -359,70 +468,41 @@ class ReportFormatter:
     # ────────────────────────────────────────────────────────────────────
 
     def _format_system_overview_section(self, specs):
-        """Format the top system overview section to mirror the UI summary card."""
+        """Format the top system overview section with a compact summary first."""
         lines = self._get_report_meta_lines(specs, "Full Diagnostic Results")
-
-        lines.append("<strong>System Overview</strong>")
+        lines.extend(self._build_compact_system_overview_lines(specs))
 
         system_type = specs.get('SystemType', 'Unknown')
-        lines.append(f"<strong>System Type:</strong> {system_type}")
+        if system_type and system_type != 'Unknown':
+            lines.append(f"<strong>System Type:</strong> {system_type}")
 
-        laptop_model = specs.get('LaptopModel', 'Not Available')
-        screen_size = specs.get('ScreenSize')
-        desktop_type = specs.get('DesktopType', '')
+        hp_specific = specs.get('HPSpecific', {}) or {}
+        family = hp_specific.get('system_family', '').strip()
+        if family:
+            lines.append(f"<strong>Product Family:</strong> {family}")
+        sku = hp_specific.get('system_sku', '').strip()
+        if sku and not re.match(r'^[0\s]+$', sku):
+            lines.append(f"<strong>Product SKU:</strong> {sku}")
 
-        if laptop_model and laptop_model != 'Not Available':
-            model_text = laptop_model
-            if screen_size:
-                model_text += f" ({screen_size})"
-            lines.append(f"<strong>Model:</strong> {model_text}")
-        elif desktop_type and desktop_type != 'None':
-            lines.append(f"<strong>Model:</strong> {desktop_type}")
-        else:
-            if system_type == 'Desktop':
-                lines.append(f"<strong>Model:</strong> Custom Build")
-            else:
-                lines.append(f"<strong>Model:</strong> Not detected")
-
-        hp_specific = specs.get('HPSpecific', {})
-        if hp_specific:
-            family = hp_specific.get('system_family', '').strip()
-            if family:
-                lines.append(f"<strong>Product Family:</strong> {family}")
-            sku = hp_specific.get('system_sku', '').strip()
-            if sku and not re.match(r'^[0\s]+$', sku):
-                lines.append(f"<strong>Product SKU:</strong> {sku}")
-
-        serial = specs.get('SerialNumber', '')
-        if serial and serial != 'N/A':
-            lines.append(f"<strong>Serial Number:</strong> {serial}")
-        else:
-            lines.append("<strong>Serial Number:</strong> Not detected")
-
-        windows_details = specs.get('WindowsDetails', 'Unknown')
-        if isinstance(windows_details, str) and windows_details not in (
-                'Unknown', 'Windows details unavailable'):
+        windows_details = specs.get('WindowsDetails', '')
+        if isinstance(windows_details, str) and windows_details not in ('Unknown', 'Windows details unavailable'):
             details_dict = {}
-            os_name = 'Windows'
             for part in windows_details.split(', '):
                 if ':' in part:
-                    k, v = part.split(':', 1)
-                    details_dict[k.strip()] = v.strip()
-                    if k.strip() == 'Edition':
-                        os_name = v.strip()
-            lines.append(f"<strong>Windows:</strong> {os_name}")
-            for key in ('Version', 'Build', 'Installed', 'Last Boot'):
-                if key in details_dict:
-                    lines.append(f"<strong>{key}:</strong> {details_dict[key]}")
-        else:
-            lines.append(f"<strong>Windows:</strong> {windows_details or 'Unknown'}")
+                    key, value = part.split(':', 1)
+                    details_dict[key.strip()] = value.strip()
 
-        system_health = specs.get('SystemHealth', 'Unknown')
+            for key in ('Version', 'Build', 'Installed', 'Last Boot'):
+                value = details_dict.get(key)
+                if value:
+                    lines.append(f"<strong>{key}:</strong> {value}")
+
+        system_health = specs.get('SystemHealth', '')
         if isinstance(system_health, list) and system_health:
             lines.append(f"<strong>Runtime Health:</strong> {system_health[0]}")
             for metric in system_health[1:]:
                 lines.append(metric)
-        elif system_health:
+        elif system_health and system_health != 'Unknown':
             lines.append(f"<strong>Runtime Health:</strong> {system_health}")
 
         return lines

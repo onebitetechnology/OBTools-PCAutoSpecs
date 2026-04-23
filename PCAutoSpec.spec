@@ -13,6 +13,7 @@ datas = [
     (str(project_root / "src"), "src"),
     (str(project_root / "assets"), "assets"),
     (str(project_root / "README.md"), "."),
+    (str(project_root / "PC AutoSpec Read Me.md"), "."),
     (str(project_root / "LICENSE"), "."),
     (str(project_root / "PCAutoSpec.bat"), "."),
 ]

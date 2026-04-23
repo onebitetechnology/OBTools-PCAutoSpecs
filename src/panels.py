@@ -819,7 +819,7 @@ class SystemInfoPanel(QWidget):
 
             # Capacity
             cap = info.split(' - ')[0] if ' - ' in info else info
-            sec.add_info_row('Capacity', cap)
+            sec.add_info_row('Capacity / Used', self._format_storage_capacity_summary(cap, clean_name))
 
             # Health
             if health:
@@ -854,6 +854,76 @@ class SystemInfoPanel(QWidget):
                         'Disk Speed',
                         f"{rd:.0f}MB/s read, {wr:.0f}MB/s write ({cat}){suffix}",
                         color=col)
+
+    @staticmethod
+    def _format_storage_capacity_summary(capacity_text, model_text=""):
+        match = re.search(
+            r'([\d.]+)\s*(GB|TB)\s+total,\s*([\d.]+)\s*GB\s+free\s*\(([\d.]+)%\s+used\)',
+            capacity_text or '',
+            re.IGNORECASE,
+        )
+        if not match:
+            return capacity_text
+
+        total_value = float(match.group(1))
+        total_unit = match.group(2).upper()
+        free_gb = float(match.group(3))
+        total_gb = total_value * 1000 if total_unit == 'TB' else total_value
+        used_gb = max(0.0, total_gb - free_gb)
+
+        return (
+            f"{SystemInfoPanel._friendly_drive_total(total_gb, model_text)} / "
+            f"{SystemInfoPanel._format_drive_used(used_gb)} used"
+        )
+
+    @staticmethod
+    def _friendly_drive_total(total_gb, model_text=""):
+        model_text = model_text or ""
+        size_match = re.search(r'(\d+(?:\.\d+)?)\s*(TB|GB)\b', model_text, re.IGNORECASE)
+        if size_match:
+            value = float(size_match.group(1))
+            unit = size_match.group(2).upper()
+            return f"{SystemInfoPanel._trim_number(value)}{unit}"
+
+        observed_to_marketed = [
+            (14.9, "16GB"),
+            (29.8, "32GB"),
+            (59.6, "64GB"),
+            (111.8, "120GB"),
+            (119.2, "128GB"),
+            (149.0, "160GB"),
+            (167.6, "180GB"),
+            (223.5, "240GB"),
+            (232.8, "250GB"),
+            (238.5, "256GB"),
+            (447.1, "480GB"),
+            (465.7, "500GB"),
+            (476.9, "512GB"),
+            (698.6, "750GB"),
+            (931.5, "1TB"),
+            (1863.0, "2TB"),
+            (2794.0, "3TB"),
+            (3726.0, "4TB"),
+            (7452.0, "8TB"),
+        ]
+        closest_actual, closest_label = min(
+            observed_to_marketed,
+            key=lambda item: abs(item[0] - total_gb),
+        )
+        if abs(closest_actual - total_gb) <= max(4.0, closest_actual * 0.12):
+            return closest_label
+        return f"{SystemInfoPanel._trim_number(total_gb)}GB"
+
+    @staticmethod
+    def _format_drive_used(amount_gb):
+        if amount_gb >= 1000:
+            return f"{SystemInfoPanel._trim_number(amount_gb / 1000, keep_two_decimals=True)}TB"
+        return f"{SystemInfoPanel._trim_number(amount_gb, keep_two_decimals=True)}GB"
+
+    @staticmethod
+    def _trim_number(value, keep_two_decimals=False):
+        text = f"{value:.2f}" if keep_two_decimals else f"{value:.1f}"
+        return text.rstrip('0').rstrip('.')
 
     def _display_smart_rows(self, sec, health_info):
         """Add SMART attribute rows to a section."""
