@@ -215,9 +215,12 @@ _OEM_UPDATE_TOOL_CATALOG = {
             "name": "HP Support Assistant",
             "matches": [
                 "hp support assistant",
+                "support assistant",
                 "hp support solutions framework",
+                "support solutions framework",
                 "hp support framework",
                 "hp support solutions",
+                "hp support",
             ],
             "paths": [
                 os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Support Assistant", "HPSA.exe"),
@@ -234,6 +237,8 @@ _OEM_UPDATE_TOOL_CATALOG = {
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Support Framework", "HPSF.exe"),
                 os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Microsoft", "Windows", "Start Menu", "Programs", "HP Help and Support", "HP Support Assistant.lnk"),
                 os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Microsoft", "Windows", "Start Menu", "Programs", "HP", "HP Support Assistant.lnk"),
+                os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs", "HP Help and Support", "HP Support Assistant.lnk"),
+                os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs", "HP", "HP Support Assistant.lnk"),
             ],
             "service_keys": [
                 "HPSA_Service",
