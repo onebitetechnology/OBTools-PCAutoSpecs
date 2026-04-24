@@ -49,6 +49,7 @@ from report_formatter import ReportFormatter
 from panels import SystemInfoPanel, ActivityLogPanel
 from dialogs import (
     SettingsDialog, ReportPreviewDialog, WelcomeDialog, StressTestDialog,
+    KeyboardTestDialog,
     ScanSummaryDialog, StartupDialog, _make_msgbox,
 )
 from updater import launch_pending_update
@@ -56,6 +57,7 @@ from workers import (
     SpecCollectorWorker, UploadWorker, GpuMonitorWorker,
     UpdateCheckWorker, UpdateDownloadWorker,
 )
+from system_specs import start_drive_extended_test, get_drive_extended_test_status
 
 
 _APP_INSTANCE_LOCK = None
@@ -281,6 +283,7 @@ class MainWindow(QMainWindow):
         # ── Signal wiring ─────────────────────────────────────────
         self._info_panel.preview_requested.connect(self._on_preview)
         self._info_panel.job_setup_requested.connect(self._open_job_setup)
+        self._info_panel.drive_extended_test_requested.connect(self._on_drive_extended_test_requested)
 
 
         # ── Defer all startup work until after event loop begins ────
@@ -772,6 +775,20 @@ class MainWindow(QMainWindow):
             gpu_name = m.group(1).strip() if m else gpu_full
             self._start_gpu_monitor(gpu_name)
 
+        if 'keyboard' not in self._job_skip_cats and not self._job_quick_upload:
+            self._status_bar.showMessage("Scan complete — waiting for keyboard test")
+            self._log_panel.append(
+                "  Keyboard Test selected — waiting for technician input...\n",
+                'info'
+            )
+            QTimer.singleShot(150, self._run_keyboard_test_workflow)
+            return
+
+        self._finalize_scan_ready_state()
+
+    def _finalize_scan_ready_state(self):
+        specs = self._system_specs
+
         if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW and self._job_ticket_id:
             QTimer.singleShot(350, self._quick_upload_system_overview)
         else:
@@ -784,6 +801,96 @@ class MainWindow(QMainWindow):
                 'info'
             )
         self._maybe_prompt_for_update()
+
+    def _run_keyboard_test_workflow(self):
+        dlg = KeyboardTestDialog(parent=self)
+        dlg.exec()
+
+        result = dlg.result_data or {'status': 'skipped', 'summary': 'Test skipped'}
+        self._apply_keyboard_test_result(result)
+        self._finalize_scan_ready_state()
+
+    def _apply_keyboard_test_result(self, result):
+        self._system_specs.setdefault('AdvancedDiagnostics', {})
+        self._system_specs.setdefault('AdvancedHealth', {})
+
+        status = result.get('status', 'unknown')
+        summary = result.get('summary', 'Keyboard test unavailable')
+        color_key = (
+            'ok' if status == 'ok'
+            else 'critical' if status == 'critical'
+            else 'warning' if status in ('warning', 'skipped')
+            else 'unknown'
+        )
+
+        self._system_specs['AdvancedDiagnostics']['KeyboardTest'] = (summary, color_key)
+        self._system_specs['AdvancedHealth']['keyboard_test'] = result
+        self._system_specs['KeyboardTest'] = result
+        self._info_panel.update_from_specs(self._system_specs)
+
+        if status == 'ok':
+            self._log_panel.append("  Keyboard Test complete — all required keys registered\n", 'success')
+        elif status == 'skipped':
+            self._log_panel.append("  Keyboard Test skipped by technician\n", 'warning')
+        else:
+            self._log_panel.append(f"  Keyboard Test result: {summary}\n", 'warning')
+
+    def _on_drive_extended_test_requested(self, drive_info):
+        if not drive_info:
+            return
+
+        model = drive_info.get('model', 'Unknown Drive')
+        current = get_drive_extended_test_status(drive_info)
+
+        if current.get('status') == 'unsupported':
+            QMessageBox.information(
+                self,
+                "Extended Drive Test",
+                f"{model}\n\n{current.get('summary', 'Extended drive testing is not supported for this drive.')}",
+            )
+            return
+
+        action = None
+        if current.get('status') == 'in_progress':
+            action = 'refresh'
+        else:
+            box = _make_msgbox(
+                self,
+                "Extended Drive Test",
+                f"{model}\n\n"
+                "This starts the drive's built-in SMART extended self-test.\n"
+                "It is non-destructive, but it can take a long time on HDDs.\n\n"
+                "Do you want to start it now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            yes_btn = box.button(QMessageBox.StandardButton.Yes)
+            no_btn = box.button(QMessageBox.StandardButton.No)
+            if yes_btn:
+                yes_btn.setText("Start Test")
+            if no_btn:
+                no_btn.setText("Cancel")
+            if box.exec() == int(QMessageBox.StandardButton.Yes):
+                action = 'start'
+            else:
+                action = 'refresh'
+
+        result = start_drive_extended_test(drive_info) if action == 'start' else get_drive_extended_test_status(drive_info)
+        self._store_drive_extended_test_result(drive_info, result)
+
+        QMessageBox.information(
+            self,
+            "Extended Drive Test",
+            f"{model}\n\n{result.get('summary', 'Status unavailable')}",
+        )
+
+    def _store_drive_extended_test_result(self, drive_info, result):
+        disk_index = drive_info.get('disk_index')
+        if disk_index is None:
+            return
+        self._system_specs.setdefault('DriveExtendedTests', {})
+        self._system_specs['DriveExtendedTests'][str(disk_index)] = result
+        self._info_panel.update_from_specs(self._system_specs)
 
     def _on_specs_error(self, error_msg):
         self._scan_in_progress = False

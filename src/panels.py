@@ -139,6 +139,7 @@ class SystemInfoPanel(QWidget):
 
     preview_requested = Signal()           # user clicked "Upload to RepairDesk"
     job_setup_requested = Signal()         # user clicked "Job Setup"
+    drive_extended_test_requested = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -273,12 +274,13 @@ class SystemInfoPanel(QWidget):
         '_update_mobo': {
             'Motherboard', 'Chipset', 'ChipsetSpecs', 'MotherboardSpecs',
             'BIOS', 'BIOSDetails'},
-        '_update_storage': {'Storage', 'StorageHealth'},
+        '_update_storage': {'Storage', 'StorageHealth', 'DriveExtendedTests'},
         '_update_network': {'Network'},
         '_update_monitors': {'Display', 'PanelDetails', 'AdvancedHealth'},
         '_update_battery': {'Battery', 'BatteryDetails'},
         '_update_advanced': {
-            'AdvancedDiagnostics', 'AdvancedHealth', 'DeviceManagerErrors'},
+            'AdvancedDiagnostics', 'AdvancedHealth', 'DeviceManagerErrors',
+            'ManufacturerUpdateTools'},
     }
 
     _ALL_UPDATERS = (
@@ -389,9 +391,11 @@ class SystemInfoPanel(QWidget):
         self._sec_adv = InfoSection("Advanced Diagnostics")
         self._sec_adv.add_static_row('event_log', 'Event Log (7 days)')
         self._sec_adv.add_static_row('win_update', 'Windows Update')
+        self._sec_adv.add_static_row('mfr_updates', 'Manufacturer Update Tools')
         self._sec_adv.add_static_row('defender', 'Defender')
         self._sec_adv.add_static_row('startup', 'Startup Items')
         self._sec_adv.add_static_row('dev_mgr', 'Device Manager')
+        self._sec_adv.add_static_row('keyboard_test', 'Keyboard Test')
         self._sec_adv.add_static_row('power_plan', 'Active Power Plan')
         self._sec_adv.add_static_row('boot_time', 'Uptime')
         L.addWidget(self._sec_adv)
@@ -765,6 +769,7 @@ class SystemInfoPanel(QWidget):
 
         storage_info = specs.get('Storage', 'Unknown')
         storage_health = specs.get('StorageHealth', [])
+        drive_test_results = specs.get('DriveExtendedTests', {}) or {}
 
         if storage_info == 'Test skipped':
             sec.add_info_row('Status', 'Test skipped', bold=True,
@@ -836,6 +841,15 @@ class SystemInfoPanel(QWidget):
                 # SMART data
                 self._display_smart_rows(sec, health)
 
+                disk_index = health.get('disk_index')
+                drive_test = drive_test_results.get(str(disk_index)) if disk_index is not None else None
+                if str(health.get('friendly_type') or '').upper() == 'HDD' and disk_index is not None:
+                    status_text, status_color = self._format_drive_extended_test_summary(drive_test)
+                    test_row = sec.add_info_row('Extended HDD Test', status_text, color=status_color)
+                    test_row.set_click_handler(
+                        lambda drive_info=dict(health): self.drive_extended_test_requested.emit(drive_info)
+                    )
+
             # Disk speed (C: only)
             if letter == 'C':
                 adv = specs.get('AdvancedHealth', {})
@@ -854,6 +868,23 @@ class SystemInfoPanel(QWidget):
                         'Disk Speed',
                         f"{rd:.0f}MB/s read, {wr:.0f}MB/s write ({cat}){suffix}",
                         color=col)
+
+    @staticmethod
+    def _format_drive_extended_test_summary(result):
+        if not result:
+            return "Not started — click to run", COLORS['text_secondary']
+
+        status = result.get('status')
+        summary = result.get('summary', 'Status unavailable')
+        if status == 'passed':
+            return summary, COLORS['success']
+        if status in ('failed', 'cancelled'):
+            return summary, COLORS['error']
+        if status == 'in_progress':
+            return summary, COLORS['warning']
+        if status in ('unsupported', 'unavailable'):
+            return summary, COLORS['text_secondary']
+        return summary, COLORS['warning']
 
     @staticmethod
     def _format_storage_capacity_summary(capacity_text, model_text=""):
@@ -1380,9 +1411,11 @@ class SystemInfoPanel(QWidget):
         row_map = (
             ('EventLog',      'event_log',  'event_viewer'),
             ('WindowsUpdate', 'win_update', 'windows_update'),
+            ('ManufacturerUpdates', 'mfr_updates', 'manufacturer_updates'),
             ('Defender',      'defender',   'defender'),
             ('StartupItems',  'startup',    'startup_impact'),
             ('DeviceManager', 'dev_mgr',    'device_manager'),
+            ('KeyboardTest',  'keyboard_test', 'keyboard_test'),
             ('PowerPlan',     'power_plan', 'power_plan'),
             ('BootTime',      'boot_time',  'boot_time'),
         )
@@ -1393,9 +1426,12 @@ class SystemInfoPanel(QWidget):
             status = data[1] if isinstance(data, (list, tuple)) and len(data) > 1 else 'unknown'
             sec.set_row_value(row_name, text, color_map.get(status))
 
-            # Attach detail popup if AdvancedHealth has data for this check
-            detail_data = health.get(health_key, {})
-            if detail_data and detail_data.get('status') in ('ok', 'warning'):
+            # Attach detail popup if detailed data exists for this check
+            if health_key == 'manufacturer_updates':
+                detail_data = specs.get('ManufacturerUpdateTools', {})
+            else:
+                detail_data = health.get(health_key, {})
+            if detail_data and detail_data.get('status') in ('ok', 'warning', 'critical'):
                 row = sec._static_rows.get(row_name)
                 if row:
                     row.set_click_handler(
@@ -1410,9 +1446,11 @@ class SystemInfoPanel(QWidget):
         builders = {
             'event_viewer':   self._detail_event_viewer,
             'windows_update': self._detail_windows_update,
+            'manufacturer_updates': self._detail_manufacturer_updates,
             'defender':       self._detail_defender,
             'startup_impact': self._detail_startup,
             'device_manager': self._detail_device_manager,
+            'keyboard_test':  self._detail_keyboard_test,
             'power_plan':     self._detail_power_plan,
             'boot_time':      self._detail_boot_time,
         }
@@ -1707,6 +1745,84 @@ class SystemInfoPanel(QWidget):
                     dlg.add_text(f"Action: {action}")
         else:
             dlg.add_text("No device errors detected.", color=COLORS['success'])
+        dlg.exec()
+
+    def _detail_keyboard_test(self, data):
+        dlg = DetailDialog("Keyboard Test", parent=self.window())
+        summary = data.get('summary', 'No keyboard test result')
+        status = data.get('status', 'unknown')
+        color = (
+            COLORS['success'] if status == 'ok'
+            else COLORS['warning'] if status in ('warning', 'skipped')
+            else COLORS['error'] if status == 'critical'
+            else COLORS['text_secondary']
+        )
+        dlg.add_row("Result", summary, color=color)
+
+        required_total = data.get('required_keys_total')
+        if required_total is not None:
+            dlg.add_row("Required Keys", str(required_total))
+
+        registered = data.get('registered_required_count')
+        if registered is not None:
+            dlg.add_row("Registered Required Keys", str(registered))
+
+        missing = data.get('missing_keys', []) or []
+        if missing:
+            dlg.add_heading("Missing Keys")
+            dlg.add_text(", ".join(missing), color=COLORS['error'])
+
+        duplicates = data.get('duplicate_keys', []) or []
+        if duplicates:
+            dlg.add_heading("Repeated Keys")
+            dlg.add_text(", ".join(duplicates), color=COLORS['warning'])
+
+        optional = data.get('optional_keys_pressed', []) or []
+        if optional:
+            dlg.add_heading("Optional Keys Pressed")
+            dlg.add_text(", ".join(optional), color=COLORS['text_secondary'])
+
+        dlg.exec()
+
+    def _detail_manufacturer_updates(self, data):
+        dlg = DetailDialog("Manufacturer Update Tools", parent=self.window())
+        summary = data.get('summary', 'Check unavailable')
+        status = data.get('status', 'unknown')
+        color = (
+            COLORS['success'] if status == 'ok'
+            else COLORS['warning'] if status in ('warning', 'skipped')
+            else COLORS['error'] if status == 'critical'
+            else COLORS['text_secondary']
+        )
+        dlg.add_row("Status", summary, color=color)
+
+        vendor = data.get('vendor')
+        if vendor:
+            dlg.add_row("OEM", vendor)
+
+        found = data.get('found_tools', []) or []
+        if found:
+            dlg.add_heading("Detected Tools")
+            for tool in found:
+                dlg.add_text(f"• {tool}", color=COLORS['success'])
+
+        raw_names = data.get('found_install_names', []) or []
+        if raw_names:
+            dlg.add_heading("Installed App Names")
+            for name in raw_names:
+                dlg.add_text(f"• {name}", color=COLORS['text_secondary'])
+
+        recommended = data.get('recommended_tools', []) or []
+        if recommended:
+            dlg.add_heading("Recommended Tools")
+            for tool in recommended:
+                dlg.add_text(f"• {tool}", color=COLORS['info'])
+
+        note = data.get('note')
+        if note:
+            dlg.add_heading("Note")
+            dlg.add_text(note, color=COLORS['text_secondary'])
+
         dlg.exec()
 
     def _detail_power_plan(self, data):

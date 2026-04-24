@@ -877,6 +877,329 @@ class StartupDialog(QDialog):
         self._collect_results()
         self.reject()
 
+
+class KeyboardTestDialog(QDialog):
+    """Interactive onscreen keyboard test used during full scans."""
+
+    REQUIRED_KEYS = [
+        'Esc', '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=',
+        'Backspace', 'Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P',
+        '[', ']', '\\', 'Caps', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L',
+        ';', "'", 'Enter', 'Shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',',
+        '.', '/', 'Ctrl', 'Alt', 'Space', '←', '↑', '↓', '→',
+    ]
+
+    DISPLAY_ROWS = [
+        ['Esc', '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 'Backspace'],
+        ['Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '[', ']', '\\'],
+        ['Caps', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ';', "'", 'Enter'],
+        ['Shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '/', '↑'],
+        ['Ctrl', 'Alt', 'Space', '←', '↓', '→'],
+    ]
+
+    KEY_SPANS = {
+        'Backspace': 2.0,
+        'Tab': 1.5,
+        'Caps': 1.8,
+        'Enter': 2.0,
+        'Shift': 2.3,
+        'Ctrl': 1.5,
+        'Alt': 1.5,
+        'Space': 6.0,
+    }
+
+    OPTIONAL_TOKEN_MAP = {
+        Qt.Key_F1: 'F1', Qt.Key_F2: 'F2', Qt.Key_F3: 'F3', Qt.Key_F4: 'F4',
+        Qt.Key_F5: 'F5', Qt.Key_F6: 'F6', Qt.Key_F7: 'F7', Qt.Key_F8: 'F8',
+        Qt.Key_F9: 'F9', Qt.Key_F10: 'F10', Qt.Key_F11: 'F11', Qt.Key_F12: 'F12',
+        Qt.Key_Insert: 'Insert', Qt.Key_Delete: 'Delete', Qt.Key_Home: 'Home',
+        Qt.Key_End: 'End', Qt.Key_PageUp: 'PageUp', Qt.Key_PageDown: 'PageDown',
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Keyboard Test")
+        self.setModal(True)
+        self.setMinimumSize(1040, 560)
+        self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        self._required_counts = {key: 0 for key in self.REQUIRED_KEYS}
+        self._optional_counts = {}
+        self._key_labels = {}
+        self.result_data = {
+            'status': 'skipped',
+            'summary': 'Test skipped',
+            'required_keys_total': len(self.REQUIRED_KEYS),
+            'registered_required_count': 0,
+            'missing_keys': [],
+            'duplicate_keys': [],
+            'optional_keys_pressed': [],
+        }
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        header = QWidget()
+        header.setFixedHeight(52)
+        header.setStyleSheet(f"background-color: {COLORS['header_bg']};")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 0, 20, 0)
+        title = QLabel("Keyboard Test")
+        title.setStyleSheet(
+            f"color: {COLORS['header_text']}; font-size: 13px; font-weight: bold;"
+        )
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        outer.addWidget(header)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(24, 22, 24, 22)
+        body.setSpacing(14)
+
+        instructions = QLabel(
+            "Press each standard key once. Keys start grey, turn green after one press, and turn red if they register multiple times. "
+            "When you finish, click Complete Keyboard Test to highlight anything that never registered.\n\n"
+            "Numpad, function keys, and other optional keys are tracked if pressed, but they do not cause the test to fail."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 10pt;"
+        )
+        body.addWidget(instructions)
+
+        self._summary_lbl = QLabel()
+        self._summary_lbl.setWordWrap(True)
+        self._summary_lbl.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 10pt; font-weight: bold;"
+        )
+        body.addWidget(self._summary_lbl)
+
+        keyboard_card = QFrame()
+        keyboard_card.setStyleSheet(
+            f"background-color: {COLORS['card_bg']}; border: 1px solid {COLORS['card_border']}; border-radius: 10px;"
+        )
+        keyboard_layout = QVBoxLayout(keyboard_card)
+        keyboard_layout.setContentsMargins(18, 18, 18, 18)
+        keyboard_layout.setSpacing(10)
+
+        for row_tokens in self.DISPLAY_ROWS:
+            row_layout = QHBoxLayout()
+            row_layout.setSpacing(8)
+            for token in row_tokens:
+                label = QLabel(token)
+                label.setAlignment(Qt.AlignCenter)
+                label.setFixedHeight(44)
+                label.setMinimumWidth(int(48 * self.KEY_SPANS.get(token, 1.0)))
+                label.setStyleSheet(self._build_key_style(token))
+                self._key_labels[token] = label
+                row_layout.addWidget(label)
+            row_layout.addStretch(1)
+            keyboard_layout.addLayout(row_layout)
+
+        body.addWidget(keyboard_card)
+
+        self._optional_lbl = QLabel("Optional keys pressed: None yet")
+        self._optional_lbl.setWordWrap(True)
+        self._optional_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 9.5pt;"
+        )
+        body.addWidget(self._optional_lbl)
+
+        legend = QLabel("Grey = not pressed yet   •   Green = registered once   •   Red = repeated or still missing after completion")
+        legend.setStyleSheet(
+            f"color: {COLORS['text_tertiary']}; font-size: 9pt;"
+        )
+        body.addWidget(legend)
+
+        body.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        self._skip_btn = QPushButton("Skip / Close")
+        self._skip_btn.setObjectName("secondary")
+        self._skip_btn.setCursor(Qt.PointingHandCursor)
+        self._skip_btn.setFocusPolicy(Qt.NoFocus)
+        self._skip_btn.clicked.connect(self._skip_test)
+        btn_row.addWidget(self._skip_btn)
+
+        self._complete_btn = QPushButton("Complete Keyboard Test")
+        self._complete_btn.setObjectName("primary")
+        self._complete_btn.setCursor(Qt.PointingHandCursor)
+        self._complete_btn.setFocusPolicy(Qt.NoFocus)
+        self._complete_btn.clicked.connect(self._complete_test)
+        btn_row.addWidget(self._complete_btn)
+
+        body.addLayout(btn_row)
+        outer.addLayout(body)
+        self._refresh_summary()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self.setFocus)
+
+    def keyPressEvent(self, event):
+        if event.isAutoRepeat():
+            event.accept()
+            return
+
+        token = self._event_to_token(event)
+        if not token:
+            super().keyPressEvent(event)
+            return
+
+        if token in self._required_counts:
+            self._required_counts[token] += 1
+            self._key_labels[token].setStyleSheet(self._build_key_style(token))
+        else:
+            self._optional_counts[token] = self._optional_counts.get(token, 0) + 1
+
+        self._refresh_summary()
+        event.accept()
+
+    def reject(self):
+        self._skip_test()
+
+    def _skip_test(self):
+        self.result_data = {
+            'status': 'skipped',
+            'summary': 'Test skipped',
+            'required_keys_total': len(self.REQUIRED_KEYS),
+            'registered_required_count': sum(1 for count in self._required_counts.values() if count > 0),
+            'missing_keys': [],
+            'duplicate_keys': [],
+            'optional_keys_pressed': sorted(self._optional_counts.keys()),
+        }
+        super().reject()
+
+    def _complete_test(self):
+        missing = [token for token, count in self._required_counts.items() if count == 0]
+        duplicates = [token for token, count in self._required_counts.items() if count > 1]
+
+        for token in missing:
+            self._key_labels[token].setStyleSheet(self._build_key_style(token, force_missing=True))
+
+        if missing and duplicates:
+            status = 'critical'
+            summary = 'Issue - Missing and repeated keys detected'
+        elif missing:
+            status = 'critical'
+            summary = 'Issue - Some Keys not registered'
+        elif duplicates:
+            status = 'warning'
+            summary = 'Issue - Duplicate keypresses detected'
+        else:
+            status = 'ok'
+            summary = 'All keys registered'
+
+        self.result_data = {
+            'status': status,
+            'summary': summary,
+            'required_keys_total': len(self.REQUIRED_KEYS),
+            'registered_required_count': sum(1 for count in self._required_counts.values() if count > 0),
+            'missing_keys': missing,
+            'duplicate_keys': duplicates,
+            'optional_keys_pressed': sorted(self._optional_counts.keys()),
+        }
+        super().accept()
+
+    def _refresh_summary(self):
+        pressed = sum(1 for count in self._required_counts.values() if count > 0)
+        repeated = sum(1 for count in self._required_counts.values() if count > 1)
+        self._summary_lbl.setText(
+            f"Required keys registered: {pressed}/{len(self.REQUIRED_KEYS)}"
+            + (f"  •  repeated keys: {repeated}" if repeated else "")
+        )
+
+        if self._optional_counts:
+            optional_text = ", ".join(sorted(self._optional_counts.keys()))
+            self._optional_lbl.setText(f"Optional keys pressed: {optional_text}")
+        else:
+            self._optional_lbl.setText("Optional keys pressed: None yet")
+
+    def _build_key_style(self, token, force_missing=False):
+        count = self._required_counts.get(token, 0)
+        if force_missing or count == 0:
+            background = "#4B5563" if not force_missing else "#991B1B"
+            border = "#6B7280" if not force_missing else "#EF4444"
+            text = "#F9FAFB"
+        elif count == 1:
+            background = "#065F46"
+            border = "#10B981"
+            text = "#F9FAFB"
+        else:
+            background = "#991B1B"
+            border = "#EF4444"
+            text = "#FDE68A"
+
+        return (
+            f"background-color: {background}; color: {text}; "
+            f"border: 1px solid {border}; border-radius: 6px; "
+            "font-size: 10pt; font-weight: bold; padding: 4px 6px;"
+        )
+
+    def _event_to_token(self, event):
+        key = event.key()
+        modifiers = event.modifiers()
+
+        if modifiers & Qt.KeypadModifier:
+            keypad_map = {
+                Qt.Key_0: 'Num 0', Qt.Key_1: 'Num 1', Qt.Key_2: 'Num 2',
+                Qt.Key_3: 'Num 3', Qt.Key_4: 'Num 4', Qt.Key_5: 'Num 5',
+                Qt.Key_6: 'Num 6', Qt.Key_7: 'Num 7', Qt.Key_8: 'Num 8',
+                Qt.Key_9: 'Num 9', Qt.Key_Plus: 'Num +', Qt.Key_Minus: 'Num -',
+                Qt.Key_Asterisk: 'Num *', Qt.Key_Slash: 'Num /',
+                Qt.Key_Period: 'Num .', Qt.Key_Enter: 'Num Enter',
+            }
+            if key in keypad_map:
+                return keypad_map[key]
+
+        if Qt.Key_A <= key <= Qt.Key_Z:
+            return chr(ord('A') + (key - Qt.Key_A))
+        if Qt.Key_0 <= key <= Qt.Key_9:
+            return chr(ord('0') + (key - Qt.Key_0))
+
+        special_map = {
+            Qt.Key_Escape: 'Esc',
+            Qt.Key_QuoteLeft: '`',
+            Qt.Key_AsciiTilde: '`',
+            Qt.Key_Minus: '-',
+            Qt.Key_Equal: '=',
+            Qt.Key_Backspace: 'Backspace',
+            Qt.Key_Tab: 'Tab',
+            Qt.Key_BracketLeft: '[',
+            Qt.Key_BracketRight: ']',
+            Qt.Key_Backslash: '\\',
+            Qt.Key_CapsLock: 'Caps',
+            Qt.Key_Semicolon: ';',
+            Qt.Key_Apostrophe: "'",
+            Qt.Key_Return: 'Enter',
+            Qt.Key_Enter: 'Enter',
+            Qt.Key_Shift: 'Shift',
+            Qt.Key_Comma: ',',
+            Qt.Key_Period: '.',
+            Qt.Key_Slash: '/',
+            Qt.Key_Control: 'Ctrl',
+            Qt.Key_Alt: 'Alt',
+            Qt.Key_Space: 'Space',
+            Qt.Key_Left: '←',
+            Qt.Key_Up: '↑',
+            Qt.Key_Down: '↓',
+            Qt.Key_Right: '→',
+        }
+        if key in special_map:
+            return special_map[key]
+
+        if key in self.OPTIONAL_TOKEN_MAP:
+            return self.OPTIONAL_TOKEN_MAP[key]
+
+        text = (event.text() or '').strip()
+        if text:
+            return text.upper()
+        return None
+
 # ─── Welcome / First-Run Dialog ─────────────────────────────────────
 
 class WelcomeDialog(QDialog):

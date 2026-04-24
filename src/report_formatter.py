@@ -604,6 +604,31 @@ class ReportFormatter:
                     f"Drive Speed: SLOW (Read {read_mb:.0f} MB/s, Write {write_mb:.0f} MB/s"
                     " \u2014 consider SSD upgrade)")
 
+        # Extended HDD self-test
+        if 'storage' not in skip_cats:
+            drive_tests = specs.get('DriveExtendedTests', {}) or {}
+            for drive in specs.get('StorageHealth', []) or []:
+                if str(drive.get('friendly_type') or '').upper() != 'HDD':
+                    continue
+                disk_index = drive.get('disk_index')
+                result = drive_tests.get(str(disk_index), {})
+                if result.get('status') == 'failed':
+                    issues.append(
+                        f"Extended HDD Test: {drive.get('model', 'Unknown Drive')} — "
+                        f"{result.get('summary', 'Failed')}"
+                    )
+
+        keyboard = advanced.get('keyboard_test', {})
+        if 'keyboard' not in skip_cats and keyboard:
+            if keyboard.get('status') == 'critical':
+                issues.append(
+                    f"Keyboard Test: {keyboard.get('summary', 'Issue - Some Keys not registered')}"
+                )
+            elif keyboard.get('status') == 'warning':
+                issues.append(
+                    f"Keyboard Test: {keyboard.get('summary', 'Issue detected')}"
+                )
+
         # WiFi diagnostics
         wifi = advanced.get('wifi', {})
         wifi_status = wifi.get('status')
@@ -725,6 +750,26 @@ class ReportFormatter:
                 issues.append("WiFi: No wireless adapter detected — unusual for a laptop")
             elif wifi_status == 'disconnected' and not ethernet_connected:
                 issues.append("WiFi: Adapter present but not connected")
+
+        drive_tests = specs.get('DriveExtendedTests', {}) or {}
+        if 'storage' not in skip_cats:
+            for drive in specs.get('StorageHealth', []) or []:
+                if str(drive.get('friendly_type') or '').upper() != 'HDD':
+                    continue
+                disk_index = drive.get('disk_index')
+                result = drive_tests.get(str(disk_index), {})
+                if result.get('status') == 'failed':
+                    issues.append(
+                        f"Extended HDD Test: {drive.get('model', 'Unknown Drive')} — "
+                        f"{result.get('summary', 'Failed')}"
+                    )
+
+        keyboard = advanced.get('keyboard_test', {})
+        if 'keyboard' not in skip_cats and keyboard:
+            if keyboard.get('status') == 'critical':
+                issues.append(f"Keyboard Test: {keyboard.get('summary', 'Issue - Some Keys not registered')}")
+            elif keyboard.get('status') == 'warning':
+                issues.append(f"Keyboard Test: {keyboard.get('summary', 'Issue detected')}")
 
         if issues:
             lines.append("<strong>Critical Issues</strong>")
@@ -1232,6 +1277,7 @@ class ReportFormatter:
         lines.append("")
 
         # Detail each drive (skip USB/external)
+        drive_tests = specs.get('DriveExtendedTests', {}) or {}
         drive_num = 1
         for drive in storage_health:
             if drive.get('status') == 'N/A':
@@ -1322,6 +1368,15 @@ class ReportFormatter:
             media_type = drive.get('media_type', '')
             if media_type and media_type.lower() != 'unknown':
                 lines.append(f"<strong>Type:</strong> {media_type}")
+
+            if str(drive.get('friendly_type') or '').upper() == 'HDD':
+                disk_index = drive.get('disk_index')
+                test_result = drive_tests.get(str(disk_index), {})
+                if test_result:
+                    lines.append(
+                        f"<strong>Extended HDD Test:</strong> "
+                        f"{test_result.get('summary', 'Status unavailable')}"
+                    )
 
             # Issues from assessment
             if smart_assessment.get('issues'):
@@ -1871,8 +1926,8 @@ class ReportFormatter:
         skip_cats = specs.get('_job_skip_cats', set())
 
         advanced_categories = (
-            'event_logs', 'windows_update', 'defender',
-            'startup_items', 'device_manager', 'power_boot',
+            'event_logs', 'windows_update', 'manufacturer_updates', 'defender',
+            'startup_items', 'device_manager', 'keyboard', 'power_boot',
         )
         if all(category in skip_cats for category in advanced_categories):
             lines.append("<strong>Status:</strong> Test skipped")
@@ -1926,6 +1981,24 @@ class ReportFormatter:
                 if wu_health.get('pending_reboot')
                 else "  - Pending reboot: No"
             )
+
+        manufacturer_tools = specs.get('ManufacturerUpdateTools', {}) or {}
+        if 'manufacturer_updates' in skip_cats:
+            lines.append("<strong>Manufacturer Update Tools:</strong> Test skipped")
+        elif manufacturer_tools:
+            lines.append(
+                f"<strong>Manufacturer Update Tools:</strong> "
+                f"{manufacturer_tools.get('summary', 'Check unavailable')}"
+            )
+            found = manufacturer_tools.get('found_tools', []) or []
+            if found:
+                lines.append(f"  - Detected: {', '.join(found)}")
+            recommended = manufacturer_tools.get('recommended_tools', []) or []
+            if recommended and not found:
+                lines.append(f"  - Recommended: {', '.join(recommended)}")
+            note = manufacturer_tools.get('note')
+            if note:
+                lines.append(f"  - Note: {note}")
 
         defender = advanced.get('defender', {})
         if 'defender' in skip_cats:
@@ -1981,6 +2054,15 @@ class ReportFormatter:
                     f"Code {device.get('error_code', '?')} — "
                     f"{device.get('error_description', 'Unknown error')}"
                 )
+
+        keyboard = advanced.get('keyboard_test', {})
+        if 'keyboard' in skip_cats:
+            lines.append("<strong>Keyboard Test:</strong> Test skipped")
+        elif keyboard:
+            lines.append(
+                f"<strong>Keyboard Test:</strong> "
+                f"{keyboard.get('summary', 'No keyboard result available')}"
+            )
 
         power_plan = advanced.get('power_plan', {})
         boot_time = advanced.get('boot_time', {})

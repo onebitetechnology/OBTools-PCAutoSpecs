@@ -10,7 +10,7 @@ import json
 import logging
 
 APP_NAME = 'PC AutoSpec'
-APP_VERSION = '2.2.45-beta.24'
+APP_VERSION = '2.2.45-beta.27'
 
 # ---------------------------------------------------------------------------
 # Paths — everything lives next to the exe (portable)
@@ -169,6 +169,7 @@ SCAN_CATEGORY_GROUPS = [
         ('gpu',          'GPU'),
         ('motherboard',  'Motherboard & BIOS'),
         ('storage',      'Storage'),
+        ('keyboard',     'Keyboard Test'),
         ('network',      'Network & WiFi'),
         ('display',      'Display & Webcam'),
         ('battery',      'Battery'),
@@ -176,6 +177,7 @@ SCAN_CATEGORY_GROUPS = [
     ('Diagnostics', [
         ('event_logs',      'Event Logs'),
         ('windows_update',  'Windows Update'),
+        ('manufacturer_updates', 'Manufacturer Update Tools'),
         ('defender',        'Defender'),
         ('startup_items',   'Startup Items'),
         ('device_manager',  'Device Manager'),

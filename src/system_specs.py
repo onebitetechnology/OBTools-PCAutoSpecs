@@ -80,6 +80,422 @@ def _resolve_bundled_smartctl_path():
     return candidates[0] if candidates else 'smartctl.exe'
 
 
+def _run_smartctl(args, timeout=45):
+    """Run smartctl with a hidden console window on Windows."""
+    smartctl_path = _resolve_bundled_smartctl_path()
+    startupinfo = None
+    creationflags = 0
+    if sys.platform == 'win32':
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        creationflags = subprocess.CREATE_NO_WINDOW
+
+    return subprocess.run(
+        [smartctl_path, *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        startupinfo=startupinfo,
+        creationflags=creationflags,
+    )
+
+
+def _build_smartctl_device_types(drive_info):
+    """Return likely smartctl device types for a drive."""
+    if not drive_info:
+        return []
+
+    bus_type = str(drive_info.get('bus_type') or '').upper()
+    interface = str(drive_info.get('interface') or '').upper()
+    friendly_type = str(drive_info.get('friendly_type') or '').upper()
+
+    if bus_type == 'USB' or interface == 'USB':
+        return []
+    if bus_type == 'RAID' or interface == 'RAID':
+        return []
+    if 'NVME' in bus_type or 'NVME' in friendly_type:
+        return ['nvme', 'sat']
+    return ['sat', 'ata']
+
+
+def _get_computer_system_identity(com_wmi=None):
+    """Return basic manufacturer/model identity for OEM-specific checks."""
+    manufacturer = ""
+    model = ""
+
+    if platform.system() != "Windows":
+        return {"manufacturer": manufacturer, "model": model}
+
+    try:
+        if com_wmi:
+            items = _query_com_wmi(com_wmi, "Win32_ComputerSystem")
+            if items and items.Count > 0:
+                computer_system = items.ItemIndex(0)
+                manufacturer = (computer_system.Properties_("Manufacturer").Value or "").strip()
+                model = (computer_system.Properties_("Model").Value or "").strip()
+                if manufacturer or model:
+                    return {"manufacturer": manufacturer, "model": model}
+    except Exception as e:
+        logging.debug(f"Failed to get computer identity via COM/WMI: {e}")
+
+    try:
+        computer_system = win32com.client.GetObject("winmgmts:root\\cimv2").ExecQuery("SELECT Manufacturer, Model FROM Win32_ComputerSystem")
+        for item in computer_system:
+            manufacturer = (getattr(item, "Manufacturer", "") or "").strip()
+            model = (getattr(item, "Model", "") or "").strip()
+            break
+    except Exception as e:
+        logging.debug(f"Failed to get computer identity via WMI fallback: {e}")
+
+    return {"manufacturer": manufacturer, "model": model}
+
+
+def _normalize_oem_vendor(manufacturer, model=""):
+    """Collapse raw manufacturer strings into a small canonical OEM set."""
+    raw = f"{manufacturer or ''} {model or ''}".upper()
+    if "LENOVO" in raw:
+        return "Lenovo"
+    if "DELL" in raw or "ALIENWARE" in raw:
+        return "Dell"
+    if "HEWLETT-PACKARD" in raw or re.search(r'(^|\s)HP(\s|$)', raw):
+        return "HP"
+    if "ASUS" in raw or "ASUSTEK" in raw:
+        return "ASUS"
+    if "ACER" in raw:
+        return "Acer"
+    if "MSI" in raw or "MICRO-STAR" in raw:
+        return "MSI"
+    if "MICROSOFT" in raw or "SURFACE" in raw:
+        return "Microsoft"
+    return ""
+
+
+_OEM_UPDATE_TOOL_CATALOG = {
+    "Lenovo": [
+        {
+            "name": "Lenovo Vantage",
+            "matches": ["lenovo vantage", "commercial vantage"],
+            "paths": [],
+        },
+        {
+            "name": "Lenovo System Update",
+            "matches": ["lenovo system update"],
+            "paths": [
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Lenovo", "System Update", "tvsu.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Lenovo", "System Update", "tvsu.exe"),
+            ],
+        },
+    ],
+    "Dell": [
+        {
+            "name": "Dell Command | Update",
+            "matches": ["dell command | update", "dell command update"],
+            "paths": [
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Dell", "CommandUpdate", "dcu-ui.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Dell", "CommandUpdate", "dcu-cli.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Dell", "CommandUpdate", "dcu-ui.exe"),
+            ],
+        },
+        {
+            "name": "Dell SupportAssist",
+            "matches": ["supportassist", "dell supportassist"],
+            "paths": [
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Dell", "SupportAssistAgent", "bin", "SupportAssist.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "SupportAssistAgent", "bin", "SupportAssist.exe"),
+            ],
+        },
+    ],
+    "HP": [
+        {
+            "name": "HP Image Assistant",
+            "matches": ["hp image assistant"],
+            "paths": [
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Image Assistant", "HPImageAssistant.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Image Assistant", "HPImageAssistant.exe"),
+            ],
+        },
+        {
+            "name": "HP Support Assistant",
+            "matches": ["hp support assistant"],
+            "paths": [
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Hewlett-Packard", "HP Support Framework", "HPSupportAssistant.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Hewlett-Packard", "HP Support Framework", "HPSupportAssistant.exe"),
+            ],
+        },
+    ],
+}
+
+
+def _iter_installed_app_display_names():
+    """Yield installed application display names from common uninstall registry keys."""
+    if platform.system() != "Windows" or not winreg:
+        return []
+
+    roots = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    )
+
+    names = []
+    for hive, root_path in roots:
+        try:
+            with winreg.OpenKey(hive, root_path) as root_key:
+                index = 0
+                while True:
+                    try:
+                        subkey_name = winreg.EnumKey(root_key, index)
+                        index += 1
+                    except OSError:
+                        break
+
+                    try:
+                        with winreg.OpenKey(root_key, subkey_name) as subkey:
+                            display_name, _ = winreg.QueryValueEx(subkey, "DisplayName")
+                            if display_name:
+                                names.append(str(display_name).strip())
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return names
+
+
+def _detect_manufacturer_update_tools(com_wmi=None):
+    """Detect OEM-specific driver/BIOS update utilities for refurb workflows."""
+    identity = _get_computer_system_identity(com_wmi)
+    manufacturer = identity.get("manufacturer", "")
+    model = identity.get("model", "")
+    vendor = _normalize_oem_vendor(manufacturer, model)
+
+    result = {
+        "status": "unknown",
+        "vendor": vendor or None,
+        "manufacturer": manufacturer,
+        "model": model,
+        "summary": "Check unavailable",
+        "recommended_tools": [],
+        "found_tools": [],
+        "found_install_names": [],
+        "note": "",
+    }
+
+    if not vendor or vendor not in _OEM_UPDATE_TOOL_CATALOG:
+        result["summary"] = "OEM update tool check not applicable"
+        result["note"] = "This check currently focuses on Lenovo, Dell, and HP refurb workflows."
+        return result
+
+    catalog = _OEM_UPDATE_TOOL_CATALOG[vendor]
+    result["recommended_tools"] = [entry["name"] for entry in catalog]
+
+    installed_names = _iter_installed_app_display_names()
+    installed_lower = [name.lower() for name in installed_names]
+
+    found_tools = []
+    found_names = []
+    for entry in catalog:
+        matched_name = None
+        for display_name, display_name_lower in zip(installed_names, installed_lower):
+            if any(match in display_name_lower for match in entry["matches"]):
+                matched_name = display_name
+                break
+        if not matched_name:
+            for path in entry.get("paths", []):
+                if path and os.path.isfile(path):
+                    matched_name = f"{entry['name']} (detected by executable)"
+                    break
+        if matched_name:
+            found_tools.append(entry["name"])
+            found_names.append(matched_name)
+
+    if found_tools:
+        result["status"] = "ok"
+        result["found_tools"] = found_tools
+        result["found_install_names"] = found_names
+        result["summary"] = f"Installed — {', '.join(found_tools)}"
+        result["note"] = (
+            "Manufacturer tool detected. Pending driver/BIOS updates still need to be checked in the vendor utility."
+        )
+    else:
+        result["status"] = "warning"
+        result["summary"] = f"Not installed — recommended: {', '.join(result['recommended_tools'])}"
+        result["note"] = (
+            "Windows Update may miss OEM-specific BIOS, firmware, or driver updates on refurb units."
+        )
+
+    return result
+
+
+def _get_manufacturer_update_tools_summary(com_wmi=None):
+    """Compact tuple summary for the Advanced Diagnostics panel."""
+    result = _detect_manufacturer_update_tools(com_wmi)
+    return (result.get("summary", "Check unavailable"), result.get("status", "unknown"))
+
+
+def _parse_drive_selftest_status(output):
+    """Parse smartctl self-test output into a UI-friendly status dict."""
+    text = (output or '').strip()
+    lower = text.lower()
+
+    if not text:
+        return {
+            'status': 'unavailable',
+            'summary': 'Extended drive test status unavailable',
+        }
+
+    progress_match = re.search(r'(\d+)% of test remaining', text, re.IGNORECASE)
+    if 'self-test routine in progress' in lower and progress_match:
+        remaining = int(progress_match.group(1))
+        completed = max(0, 100 - remaining)
+        return {
+            'status': 'in_progress',
+            'summary': f'In progress — {completed}% complete',
+            'percent_complete': completed,
+            'percent_remaining': remaining,
+        }
+
+    if 'completed without error' in lower:
+        return {
+            'status': 'passed',
+            'summary': 'Passed — completed without error',
+        }
+
+    if 'aborted by host' in lower or 'interrupted' in lower:
+        return {
+            'status': 'cancelled',
+            'summary': 'Cancelled or interrupted',
+        }
+
+    failed_match = re.search(r'completed:\s*([^\n\r]+)', text, re.IGNORECASE)
+    if failed_match:
+        reason = failed_match.group(1).strip().rstrip('.')
+        return {
+            'status': 'failed',
+            'summary': f'Failed — {reason}',
+        }
+
+    if 'no self-tests have been logged' in lower or 'no self-test has ever been run' in lower:
+        return {
+            'status': 'not_run',
+            'summary': 'Not started',
+        }
+
+    return {
+        'status': 'unknown',
+        'summary': 'Status detected but not fully parsed',
+        'raw_output': text,
+    }
+
+
+def get_drive_extended_test_status(drive_info):
+    """Return the current extended SMART self-test state for a drive."""
+    if platform.system() != "Windows":
+        return {'status': 'unavailable', 'summary': 'Only supported on Windows'}
+
+    if not drive_info:
+        return {'status': 'unavailable', 'summary': 'Drive information unavailable'}
+
+    drive_type = str(drive_info.get('friendly_type') or '').upper()
+    if drive_type != 'HDD':
+        return {'status': 'unsupported', 'summary': 'Extended test currently supported for HDDs only'}
+
+    disk_index = drive_info.get('disk_index')
+    if disk_index is None:
+        return {'status': 'unavailable', 'summary': 'Drive index unavailable'}
+
+    device_types = _build_smartctl_device_types(drive_info)
+    if not device_types:
+        return {'status': 'unsupported', 'summary': 'SMART self-test not supported for this controller'}
+
+    drive_path = f"/dev/pd{disk_index}"
+    last_error = None
+    for device_type in device_types:
+        try:
+            result = _run_smartctl(
+                ['-c', '-l', 'selftest', '-d', device_type, drive_path],
+                timeout=45,
+            )
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+        combined = "\n".join(
+            part for part in (result.stdout or '', result.stderr or '') if part
+        ).strip()
+        if result.returncode in (0, 4) and combined:
+            parsed = _parse_drive_selftest_status(combined)
+            parsed['device_type'] = device_type
+            return parsed
+        last_error = combined or f"smartctl exit code {result.returncode}"
+
+    return {
+        'status': 'unavailable',
+        'summary': 'Unable to read SMART self-test status',
+        'reason': last_error or 'smartctl unavailable',
+    }
+
+
+def start_drive_extended_test(drive_info):
+    """Start a non-destructive SMART long self-test on an HDD."""
+    if platform.system() != "Windows":
+        return {'status': 'unavailable', 'summary': 'Only supported on Windows'}
+
+    if not drive_info:
+        return {'status': 'unavailable', 'summary': 'Drive information unavailable'}
+
+    drive_type = str(drive_info.get('friendly_type') or '').upper()
+    if drive_type != 'HDD':
+        return {'status': 'unsupported', 'summary': 'Extended test currently supported for HDDs only'}
+
+    disk_index = drive_info.get('disk_index')
+    if disk_index is None:
+        return {'status': 'unavailable', 'summary': 'Drive index unavailable'}
+
+    current = get_drive_extended_test_status(drive_info)
+    if current.get('status') == 'in_progress':
+        return current
+
+    device_types = _build_smartctl_device_types(drive_info)
+    if not device_types:
+        return {'status': 'unsupported', 'summary': 'SMART self-test not supported for this controller'}
+
+    drive_path = f"/dev/pd{disk_index}"
+    last_error = None
+    for device_type in device_types:
+        try:
+            result = _run_smartctl(
+                ['-t', 'long', '-d', device_type, drive_path],
+                timeout=45,
+            )
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+        combined = "\n".join(
+            part for part in (result.stdout or '', result.stderr or '') if part
+        ).strip()
+        if result.returncode in (0, 4):
+            minutes_match = re.search(r'Please wait (\d+) minutes', combined, re.IGNORECASE)
+            minutes = int(minutes_match.group(1)) if minutes_match else None
+            summary = 'Extended HDD test started'
+            if minutes:
+                summary += f' — estimated {minutes} minutes'
+            return {
+                'status': 'in_progress',
+                'summary': summary,
+                'estimated_minutes': minutes,
+                'device_type': device_type,
+            }
+        last_error = combined or f"smartctl exit code {result.returncode}"
+
+    return {
+        'status': 'unavailable',
+        'summary': 'Could not start extended drive test',
+        'reason': last_error or 'smartctl unavailable',
+    }
+
+
 def _normalize_ram_slot_label(device_locator, bank_label, slot_index, used_labels):
     """Prefer the WMI slot label, but guarantee a unique readable slot name."""
     def _clean(value):
@@ -730,12 +1146,20 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
     specs['AdvancedDiagnostics'] = {
         'EventLog': _diag_or_skipped('event_logs', _get_event_log_summary),
         'WindowsUpdate': _diag_or_skipped('windows_update', _get_windows_update_status),
+        'ManufacturerUpdates': _diag_or_skipped('manufacturer_updates', lambda: _get_manufacturer_update_tools_summary(com_wmi)),
         'Defender': _diag_or_skipped('defender', _get_defender_status),
         'StartupItems': _diag_or_skipped('startup_items', _get_startup_items),
         'DeviceManager': _diag_or_skipped('device_manager', _get_device_manager_issues),
+        'KeyboardTest': ('Test skipped', 'skipped') if 'keyboard' in skip else ('Pending technician keyboard test', 'warning'),
         'PowerPlan': _diag_or_skipped('power_boot', _get_power_plan),
         'BootTime': _diag_or_skipped('power_boot', _get_boot_time)
     }
+
+    specs['ManufacturerUpdateTools'] = (
+        {'status': 'skipped', 'summary': 'Test skipped'}
+        if 'manufacturer_updates' in skip
+        else _detect_manufacturer_update_tools(com_wmi)
+    )
 
     # Promote to top-level keys for report formatter
     _adv = specs['AdvancedDiagnostics']
@@ -4314,6 +4738,7 @@ def _get_storage_health_structured(com_wmi):
                         drive_info = {
                             'model': drive_model,
                             'size_gb': drive_size_gb,
+                            'disk_index': disk_index,
                             'partition_style': partition_style,
                             'media_type': disk.Properties_("MediaType").Value or "Unknown",
                             'interface': disk.Properties_("InterfaceType").Value or "Unknown",

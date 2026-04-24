@@ -1,155 +1,260 @@
 # PC AutoSpec Read Me
 
-## What This App Does
+## What PC AutoSpec Is
 
-PC AutoSpec is a portable Windows diagnostics and RepairDesk upload tool for repair shops.
+PC AutoSpec is a portable Windows diagnostics and RepairDesk upload tool built for repair shops and refurb workflows.
 
-It helps you:
+It is designed to help a tech:
 - gather quick system details for a ticket
-- run a deeper diagnostic scan when needed
-- review results before upload
-- send formatted notes into RepairDesk
-- keep the app updated from GitHub
+- run a deeper full diagnostic scan when needed
+- review the results before upload
+- send formatted HTML notes into RepairDesk
+- update the app from GitHub
 
-## Quick Start
+PC AutoSpec can be used in two main ways:
+- `Quick Upload System Details` for fast intake notes
+- `Start Scan` for a fuller diagnostic report
 
-1. Open `PCAutoSpec.exe`.
-2. Complete the first-time setup if prompted.
-3. In `Job Setup`, choose the technician, ticket, upload mode, and test categories.
-4. Pick one of these paths:
-- `Quick Upload System Details` for a fast hardware summary
-- `Start Scan` for a full diagnostic run
-- `Skip, Don't Scan` to leave the app idle without running anything
-5. Review the results.
-6. Upload to RepairDesk when ready.
+## First-Time Setup
 
-## Main Buttons And What They Do
+When the app is opened for the first time, it may ask for setup details.
 
-### Main Window
+Shops can configure:
+- store name
+- RepairDesk authentication
+  - API key, or
+  - OAuth 2.0
+- optional shop WiFi auto-connect details
+- optional technician list
 
-- `Job Setup`
-  Opens the pre-scan setup window where you enter ticket details, choose upload mode, and pick which diagnostic categories to run.
+The public build should ship blank. Each shop provides its own credentials.
 
-- `Scan Summary / Upload`
-  Opens the review and upload dialog after a scan. This is where you preview the HTML note and send it to RepairDesk.
+## Main Window
 
-- `Settings`
-  Opens app settings for store details, authentication, updates, Wi-Fi auto-connect, technician list, and help links.
+### `Job Setup`
 
-### Job Setup
+Opens the pre-scan setup window.
 
-- `Confirm Ticket`
-  Verifies the ticket number against RepairDesk before uploading or scanning.
+Use this to:
+- choose technician
+- enter or confirm the ticket number
+- choose `Upload System Overview only` or `Upload full results`
+- select which test categories should run
 
-- `Quick Upload System Details`
-  Collects a lightweight system overview and uploads it to the confirmed ticket without running the full diagnostic test set.
+### `Scan Summary / Upload`
 
-- `Start Scan`
-  Runs the selected test categories and then lets you review the results before upload.
+Opens the post-scan review window.
 
-- `Skip, Don't Scan`
-  Closes Job Setup and returns to the main app without running a scan.
+Use this to:
+- review the job details
+- preview the HTML upload
+- make last-minute edits to upload details
+- upload the results to RepairDesk
 
-- `Select All` / `Deselect All`
-  Quickly enable or disable all diagnostic categories.
+### `Settings`
 
-## Quick Upload Vs Full Scan
+Opens configuration and support options, including:
+- store / RepairDesk auth settings
+- app update channel and updater controls
+- technician list
+- WiFi settings
+- Read Me link
+- bug report / feature request helper
 
-### Quick Upload System Details
+## Job Setup
 
-Quick Upload is for fast intake notes when you only need basic hardware details on the ticket.
+The `Job Setup` window is the main starting point for each machine.
 
-It uploads:
+### Buttons
+
+#### `Confirm Ticket`
+
+Checks the RepairDesk ticket before quick upload or full upload.
+
+#### `Quick Upload System Details`
+
+Runs a lightweight collection and uploads the system overview directly to the confirmed ticket.
+
+This is intended for:
+- intake
+- quick refurb intake notes
+- machines where you do not want to run the full diagnostics yet
+
+#### `Start Scan`
+
+Runs the selected diagnostic categories, then leaves the app ready for review in `Scan Summary / Upload`.
+
+#### `Skip, Don't Scan`
+
+Closes Job Setup and leaves the app idle.
+
+#### `Select All` / `Deselect All`
+
+Quickly enable or disable all scan categories.
+
+## Quick Upload vs Full Scan
+
+## Quick Upload System Details
+
+Quick Upload is for fast ticket notes.
+
+It is meant to answer:
+- what machine is this?
+- what OS is on it?
+- what CPU / RAM / storage is inside it?
+
+The uploaded overview is intentionally compact.
+
+It includes:
 - model
 - serial number
 - current OS version
 - CPU
 - RAM
 - drive information
+- which tests were not performed
 
-It does not run the deeper diagnostics like stress testing, event log review, Windows Update checks, or Defender checks.
+Quick Upload does **not** run the full advanced diagnostics.
 
-### Full Scan
+After a successful quick upload, the app asks what to do next:
+- `Perform Full Scan`
+- `Close App / Eject USB`
+- `Stay Here`
 
-Full Scan is for deeper diagnostic work when you want a fuller picture of the machine's condition.
+## Full Scan
+
+Full Scan is for deeper diagnostics and refurb validation.
 
 It can include:
 - hardware identification
-- temperatures
+- CPU/GPU temperatures
+- CPU load temperature stress test
 - drive health
 - drive speed
 - battery health
 - event logs
 - Windows Update status
+- manufacturer update tool presence
 - Defender status
-- startup programs
+- startup items
 - device manager issues
-- power and boot details
+- power / boot details
+- keyboard test
 
-## What Each Full Test Does
+## Test Categories
+
+The checkboxes in `Job Setup` decide which deeper diagnostics should run.
+
+Basic system identification still appears even when deeper checks are skipped.
 
 ### CPU
 
 Collects:
-- processor model
+- CPU model
 - clock information
-- core and thread details
+- core and thread counts
 - idle temperature when available
 - load temperature during the CPU stress test
 
-The stress test temporarily increases CPU load to check thermal behavior and stability.
+The CPU stress test is short and is only meant to observe temperature behavior under load.
+
+There is also a cancel button during the CPU stress popup.
 
 ### RAM
 
 Collects:
 - total installed memory
 - memory type when available
-- installed module details
 - slot population
-- basic compatibility observations
+- module details
+
+For quick upload, RAM is simplified to practical installed capacity, such as:
+- `8GB of DDR4`
+- `16GB of DDR4`
+- `32GB of DDR5`
 
 ### GPU
 
 Collects:
-- graphics adapter model
+- GPU model
 - VRAM when available
 - driver details
-- live GPU telemetry when available
-- GPU temperature data when available
+- live GPU metrics when available
+- GPU idle / load temperatures when available
+
+Temperature lines now try to show the sensor source being used.
 
 ### Motherboard & BIOS
 
 Collects:
 - motherboard model
 - BIOS version
-- chipset or platform data when available
-- some memory/platform capability details
+- chipset / platform details when available
 
 ### Storage
 
 Collects:
-- each drive
-- capacity and used/free space
-- model / part number
-- drive type where available
+- drive model / part number
+- drive type
+- total capacity
+- used / free space
 - SMART health when available
-- drive read/write speed when available
+- read / write speed when available
+
+Storage formatting is meant to stay technician-friendly. For example:
+
+`C: 256GB/60.35GB Used - Patriot M.2 P320 256GB (NVMe SSD)`
+
+#### Manual Extended HDD Test
+
+For HDDs, the Storage section also supports a manual `Extended HDD Test`.
+
+This uses the drive's built-in SMART long self-test. It is:
+- non-destructive
+- manual
+- intended for suspected HDD problems or refurb verification
+
+It is not the same as a destructive write test.
+
+### Keyboard Test
+
+Keyboard Test is a technician-driven popup test.
+
+How it works:
+- keys start grey
+- key turns green after the first successful press
+- key turns red if it registers multiple presses
+- any required key not pressed by the time the test is completed turns red
+
+Result logic:
+- `All keys registered` when all standard required keys were pressed
+- `Issue - Some Keys not registered` when required keys are missing or repeated
+
+Numpad and some optional keys are treated as optional, so the test does not fail just because the keyboard does not physically include them.
+
+The result appears:
+- in the app UI
+- in the HTML upload
+- in critical issues when there is a keyboard problem
 
 ### Network & WiFi
 
 Collects:
-- Ethernet and Wi-Fi adapters
+- Ethernet adapters
+- WiFi adapters
 - MAC address
 - link speed
-- Wi-Fi SSID and signal when available
-- driver details where available
+- SSID and signal when available
+- basic WiFi state
+
+WiFi being disconnected is not treated as a critical issue if the machine already has active Ethernet.
 
 ### Display & Webcam
 
 Collects:
-- internal and external display details
-- panel information when available
-- webcam presence and basic function state when available
+- display details
+- internal panel details when available
+- webcam detection / basic function result when available
 
 ### Battery
 
@@ -158,95 +263,244 @@ Collects:
 - design capacity
 - full charge capacity
 - wear level
-- cycle count when available
+- cycle count
+- power source
+- estimated runtime when available
+
+Battery capacities prefer watt-hour values when available.
 
 ### Event Logs
 
-Looks at recent Windows event log issues to help surface crashes, recurring failures, or other warning signs.
+Checks recent Windows event log errors and critical events to help spot:
+- app crashes
+- shutdown/power issues
+- recurring system errors
 
 ### Windows Update
 
 Checks:
-- recent Windows Update activity
-- failed updates
-- pending reboot conditions
+- recent installed updates
+- failed update count
+- pending reboot state
+
+### Manufacturer Update Tools
+
+This is a refurb-oriented check.
+
+It currently looks for OEM update tools such as:
+- Lenovo Vantage / Lenovo System Update
+- Dell Command Update / SupportAssist
+- HP Image Assistant / HP Support Assistant
+
+This check tells you whether the relevant manufacturer tool is installed.
+
+It does **not** yet guarantee that all OEM updates have been completed. It is meant to flag whether the machine has the right vendor update path available.
 
 ### Defender
 
 Checks:
-- real-time protection status
+- real-time protection
+- antispyware state
 - definition age
 - last scan details when available
 
 ### Startup Items
 
-Collects startup programs so you can quickly spot heavy, unusual, or unnecessary auto-start items.
+Collects startup programs so you can quickly spot:
+- heavy startup load
+- suspicious startup entries
+- junk that should be removed during refurb work
 
 ### Device Manager
 
-Checks for hardware with driver errors, warning states, or missing drivers.
+Checks for:
+- hardware with warnings
+- missing drivers
+- device error codes
 
 ### Power & Boot
 
 Collects:
 - active power plan
-- uptime
-- boot-time related health information when available
+- boot timing
+- last boot information
 
 ## Scan Summary / Upload
 
-After a full scan, open `Scan Summary / Upload` to:
-- review the summarized job details
+`Scan Summary / Upload` is the post-scan review step for a full scan.
+
+Its job is to:
+- review the collected results
 - preview the HTML note
-- add or update tech notes
-- upload to RepairDesk
+- make final upload adjustments
+- send the note to RepairDesk
 
-Quick uploads skip this longer review flow and send the system overview straight to the confirmed ticket.
+This is intentionally different from `Job Setup`.
 
-## Settings
+### Why there are two dialogs
 
-### Store / RepairDesk Settings
+#### `Job Setup`
 
-Use Settings to configure:
-- store name
-- RepairDesk API key or OAuth credentials
-- update channel preferences
-- technician names
-- Wi-Fi auto-connect information
+Used before scanning.
 
-### App Updates
+Purpose:
+- choose what kind of job this is
+- decide quick upload vs full scan
+- decide which categories to run
+- confirm the ticket
+
+#### `Scan Summary / Upload`
+
+Used after a full scan.
+
+Purpose:
+- review the results
+- inspect the upload preview
+- upload the final report
+
+Quick Upload skips this longer review flow and uploads directly.
+
+## HTML Upload Format
+
+### System Overview Only
+
+The quick upload uses a short top summary such as:
+
+`System Overview: PC AutoSpec Version 2.2.45-beta.xx. Uploaded by: Tech Name`
+
+Then:
+- Model
+- Serial Number
+- Current OS Version
+- CPU
+- RAM
+- Drive Information
+
+### Full Diagnostic Results
+
+The full upload starts with the same compact top block, then continues with:
+- Critical Issues
+- CPU
+- RAM
+- GPU
+- Motherboard & BIOS
+- Storage
+- Network & Peripherals
+- Monitors
+- Battery
+- Advanced Diagnostics
+
+The HTML upload also includes the PC AutoSpec app version so you can tell which build generated the note.
+
+## Updates
+
+The app can check GitHub releases for updates.
+
+### Update channels
+
+Users can choose whether to include:
+- stable releases only
+- beta builds too
+
+### App update flow
+
+In Settings, the update controls work as a step flow:
+- `Check for Updates`
+- `Download Update`
+- `Install Update Now`
+
+The app can also check for updates automatically on launch.
+
+### Portable USB behavior
+
+When running from USB/removable media, the updater prefers the portable ZIP update path instead of the normal Windows installer path, so it does not register itself as a host-installed application unnecessarily.
+
+## RepairDesk Authentication
+
+PC AutoSpec supports:
+- legacy API key auth
+- OAuth 2.0
+
+Each shop should provide its own credentials.
+
+The public build should not contain anyone else's:
+- API key
+- OAuth client ID
+- OAuth client secret
+- access token
+- refresh token
+
+## WiFi Auto Connect
+
+WiFi fields are optional.
+
+If used, the app can store shop WiFi information for auto-connect workflows.
+
+If not needed, this section can stay collapsed and blank.
+
+## Technician List
+
+The technician list is dynamic.
 
 You can:
-- check for updates
-- download updates
-- install updates
-- choose whether to include beta builds
+- add as many technician rows as needed
+- collapse the section when not needed
 
-When an update is available, the app can prompt you automatically on launch.
+## Read Me / Support
 
-### Read Me / Help
+In Settings, you can:
+- open this Read Me
+- use the `Feature Request / Report Bug` helper
 
-Use the `Open Read Me` button in Settings any time you want this guide.
+The bug report helper opens the default email app and includes:
+- PC AutoSpec version
+- update channel
+- machine name
+- latest log path
 
-## Notes About Portable Use
-
-- The app is designed to run from a USB or portable folder.
-- Settings and logs are stored beside the app.
-- If you update from a USB build, the updater should use the portable package instead of registering a full installed app on the host PC.
-
-## Tips
-
-- Use `Quick Upload System Details` for fast intake notes.
-- Use `Full Scan` when the machine needs deeper diagnostics.
-- If LibreHardwareMonitor or its helper takes a moment to install, give it a few seconds and watch for prompts behind other windows.
-- If something looks stuck, check the Activity Log on the right side of the app for clues.
+If needed, manually attach the latest log file from the `logs` folder.
 
 ## Logs
 
-Logs are stored in the app folder under `logs`.
+Logs are stored beside the app in:
+
+`logs`
 
 If you are reporting a bug, include:
 - what you were doing
-- whether it was a quick upload or full scan
-- the ticket number if relevant
-- the latest log file from the `logs` folder
+- whether it was quick upload or full scan
+- ticket number if relevant
+- whether this was a USB or installed run
+- the latest log file
+
+## Known Practical Notes
+
+- LibreHardwareMonitor may depend on its helper installer on some machines. If the app warns you to check for a hidden installer, look behind other windows.
+- WinPE is not a fully supported full-diagnostics environment. Basic info may work better there than the full diagnostic set.
+- Some drive SMART or OEM update checks depend on what the controller and Windows expose on that machine.
+
+## Basic Workflow Recommendation
+
+### Intake / quick note
+
+1. Open PC AutoSpec
+2. Open `Job Setup`
+3. Confirm the ticket
+4. Choose `Upload System Overview only`
+5. Click `Quick Upload System Details`
+
+### Full diagnostic
+
+1. Open `Job Setup`
+2. Confirm the ticket
+3. Choose `Upload full results`
+4. Leave desired categories checked
+5. Click `Start Scan`
+6. Complete technician-driven prompts like Keyboard Test if requested
+7. Open `Scan Summary / Upload`
+8. Review the HTML preview
+9. Upload to RepairDesk
+
+## Keeping This Guide Current
+
+This Read Me should be updated whenever major workflow, UI, test-category, updater, or upload-format changes are made.
