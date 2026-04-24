@@ -3307,6 +3307,7 @@ class SettingsDialog(QDialog):
         self.accept()
         app = QApplication.instance()
         if app:
+            app.setProperty("pcautospec_update_in_progress", True)
             app.quit()
 
     def _on_save(self):

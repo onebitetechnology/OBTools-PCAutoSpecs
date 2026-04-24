@@ -419,7 +419,11 @@ def download_update(
     }
 
 
-def launch_pending_update(package_path: str, install_dir: Optional[str] = None) -> None:
+def launch_pending_update(
+    package_path: str,
+    install_dir: Optional[str] = None,
+    app_pid: Optional[int] = None,
+) -> None:
     """
     Launch the update package after the app exits.
 
@@ -436,42 +440,52 @@ def launch_pending_update(package_path: str, install_dir: Optional[str] = None) 
     if install_dir is None:
         install_dir = get_app_dir()
 
-    launcher_script = _download_root() / "launch-update.cmd"
+    update_root = _download_root()
+    launcher_script = update_root / "launch-update.cmd"
     install_dir = str(Path(install_dir).resolve()) if install_dir else ""
+    if app_pid is None:
+        app_pid = os.getpid()
 
     if package.suffix.lower() == ".zip":
         if not install_dir:
             raise RuntimeError("Portable updates require a target folder.")
 
-        staging_dir = _download_root() / "portable-staging"
+        staging_dir = update_root / "portable-staging"
+        pending_metadata = _pending_metadata_path()
+        log_path = update_root / "portable-apply.log"
         zip_path = str(package).replace("'", "''")
         dest_path = install_dir.replace("'", "''")
         stage_path = str(staging_dir).replace("'", "''")
+        pending_path = str(pending_metadata).replace("'", "''")
+        apply_log_path = str(log_path).replace("'", "''")
         powershell_cmd = (
             "$ErrorActionPreference = 'Stop'; "
-            "Start-Sleep -Seconds 2; "
+            f"$pidToWait = {int(app_pid)}; "
+            "$deadline = (Get-Date).AddMinutes(2); "
+            "while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) { "
+            "Start-Sleep -Milliseconds 500; "
+            "if ((Get-Date) -gt $deadline) { throw 'Timed out waiting for PC AutoSpec to close.' } "
+            "}; "
+            "Start-Sleep -Seconds 1; "
             f"$zip = '{zip_path}'; "
             f"$dest = '{dest_path}'; "
             f"$stage = '{stage_path}'; "
+            f"$pending = '{pending_path}'; "
+            f"$log = '{apply_log_path}'; "
+            "'Starting portable update apply' | Out-File -FilePath $log -Encoding utf8 -Append; "
             "if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }; "
             "New-Item -ItemType Directory -Path $stage | Out-Null; "
             "Expand-Archive -Path $zip -DestinationPath $stage -Force; "
-            "$exclude = @('settings.json','logs'); "
-            "Get-ChildItem -Path $stage -Force | ForEach-Object { "
-            "if ($exclude -contains $_.Name) { return }; "
-            "$target = Join-Path $dest $_.Name; "
-            "if ($_.PSIsContainer) { "
-            "if (Test-Path $target) { Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue }; "
-            "Move-Item $_.FullName $target -Force "
-            "} else { "
-            "Move-Item $_.FullName $target -Force "
-            "} "
-            "}; "
+            "$items = @(Get-ChildItem -Path $stage -Force); "
+            "$source = if ($items.Count -eq 1 -and $items[0].PSIsContainer) { $items[0].FullName } else { $stage }; "
+            "& robocopy $source $dest /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP /XD logs /XF settings.json pending-update.json | Out-Null; "
+            "if ($LASTEXITCODE -gt 7) { throw ('Robocopy failed with exit code ' + $LASTEXITCODE) }; "
+            "if (Test-Path $pending) { Remove-Item $pending -Force -ErrorAction SilentlyContinue }; "
+            "'Portable update apply complete' | Out-File -FilePath $log -Encoding utf8 -Append; "
             "Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue"
         )
         launcher_script.write_text(
             "@echo off\n"
-            "ping 127.0.0.1 -n 3 > nul\n"
             f"powershell -NoProfile -ExecutionPolicy Bypass -Command \"{powershell_cmd}\"\n"
             'del "%~f0"\n',
             encoding="utf-8",
@@ -482,7 +496,15 @@ def launch_pending_update(package_path: str, install_dir: Optional[str] = None) 
             installer_cmd += f' /DIR="{install_dir}"'
         launcher_script.write_text(
             "@echo off\n"
-            "ping 127.0.0.1 -n 3 > nul\n"
+            f"powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+            f"$pidToWait = {int(app_pid)}; "
+            "$deadline = (Get-Date).AddMinutes(2); "
+            "while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) { "
+            "Start-Sleep -Milliseconds 500; "
+            "if ((Get-Date) -gt $deadline) { exit 1 } "
+            "}; "
+            "Start-Sleep -Seconds 1; "
+            "\"\n"
             f"{installer_cmd}\n"
             'del "%~f0"\n',
             encoding="utf-8",

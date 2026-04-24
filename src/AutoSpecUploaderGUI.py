@@ -1322,6 +1322,7 @@ class MainWindow(QMainWindow):
 
         app = QApplication.instance()
         if app:
+            app.setProperty("pcautospec_update_in_progress", True)
             app.quit()
 
     def _open_settings(self):
@@ -1346,8 +1347,12 @@ class MainWindow(QMainWindow):
             logging.info("GPU monitoring thread stopped")
         self._stop_lhm()
 
-        # Offer to eject the USB before closing
-        self._prompt_eject()
+        app = QApplication.instance()
+        if not (app and bool(app.property("pcautospec_update_in_progress"))):
+            # Offer to eject the USB before closing
+            self._prompt_eject()
+        else:
+            logging.info("Skipping USB eject prompt because an app update is being applied")
 
         event.accept()
         logging.info("Application closed")
