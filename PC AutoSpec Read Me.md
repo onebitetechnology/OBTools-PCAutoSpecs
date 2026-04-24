@@ -205,6 +205,8 @@ Storage formatting is meant to stay technician-friendly. For example:
 
 `C: 256GB/60.35GB Used - Patriot M.2 P320 256GB (NVMe SSD)`
 
+When PC AutoSpec is running from a USB stick, the app's own USB volume is ignored in the storage scan so it does not clutter the results.
+
 #### Manual Extended HDD Test
 
 For HDDs, the Storage section also supports a manual `Extended HDD Test`.
@@ -223,8 +225,10 @@ Keyboard Test is a technician-driven popup test.
 How it works:
 - keys start grey
 - key turns green after the first successful press
-- key turns red if it registers multiple presses
+- key only turns red for near-instant duplicate bounce / ghost presses
 - any required key not pressed by the time the test is completed turns red
+- click a key to reset it back to grey and test it again
+- double-click a key to mark it as not physically present on that keyboard
 
 Result logic:
 - `All keys registered` when all standard required keys were pressed
@@ -282,6 +286,10 @@ Checks:
 - recent installed updates
 - failed update count
 - pending reboot state
+- available driver updates
+- available optional updates
+
+If important Windows driver / optional updates are still available, PC AutoSpec can flag that in critical issues so the tech can install updates and re-run the scan.
 
 ### Manufacturer Update Tools
 
@@ -295,6 +303,8 @@ It currently looks for OEM update tools such as:
 This check tells you whether the relevant manufacturer tool is installed.
 
 It does **not** yet guarantee that all OEM updates have been completed. It is meant to flag whether the machine has the right vendor update path available.
+
+When the support app is missing, PC AutoSpec can flag it in critical issues and provide a vendor download link in the scan summary popup.
 
 ### Defender
 

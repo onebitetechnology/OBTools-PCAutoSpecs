@@ -792,6 +792,13 @@ class MainWindow(QMainWindow):
         if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW and self._job_ticket_id:
             QTimer.singleShot(350, self._quick_upload_system_overview)
         else:
+            specs_with_context = self._build_specs_with_context()
+            try:
+                issues = ReportFormatter()._get_critical_issues_list(specs_with_context)
+            except Exception as e:
+                logging.warning(f"Could not build critical issues summary: {e}")
+                issues = []
+
             # Leave the app in a ready state after a full scan so external
             # machine popups/installers cannot trap PC AutoSpec behind a
             # modal upload dialog. The tech can review/upload when ready.
@@ -800,6 +807,11 @@ class MainWindow(QMainWindow):
                 "  Scan complete — review results and upload when ready\n",
                 'info'
             )
+            if issues:
+                QTimer.singleShot(
+                    200,
+                    lambda: ScanSummaryDialog(issues, specs_with_context, parent=self).exec()
+                )
         self._maybe_prompt_for_update()
 
     def _run_keyboard_test_workflow(self):
@@ -1346,13 +1358,6 @@ class MainWindow(QMainWindow):
             self._gpu_worker.stop()
             logging.info("GPU monitoring thread stopped")
         self._stop_lhm()
-
-        app = QApplication.instance()
-        if not (app and bool(app.property("pcautospec_update_in_progress"))):
-            # Offer to eject the USB before closing
-            self._prompt_eject()
-        else:
-            logging.info("Skipping USB eject prompt because an app update is being applied")
 
         event.accept()
         logging.info("Application closed")

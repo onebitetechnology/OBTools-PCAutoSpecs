@@ -272,6 +272,13 @@ def collect_event_viewer_summary(days: int = 7) -> Dict[str, Any]:
                 "message": latest_critical.get("message", "")[:200],
             }
 
+        driver_titles = (available_updates or {}).get("DriverTitles", []) or []
+        optional_titles = (available_updates or {}).get("OptionalTitles", []) or []
+        if isinstance(driver_titles, str):
+            driver_titles = [driver_titles]
+        if isinstance(optional_titles, str):
+            optional_titles = [optional_titles]
+
         return {
             "status": "ok",
             "days_lookback": days,
@@ -364,6 +371,50 @@ def collect_windows_update_health() -> Dict[str, Any]:
         reboot_check = _run_powershell_json(ps_pending_reboot)
         pending_reboot = reboot_check.get("PendingReboot", False) if reboot_check else False
         
+        # 4. Available optional / driver updates
+        ps_available_updates = r"""
+        $ErrorActionPreference = 'SilentlyContinue'
+        try {
+            $session = New-Object -ComObject Microsoft.Update.Session
+            $searcher = $session.CreateUpdateSearcher()
+            $result = $searcher.Search("IsInstalled=0 and IsHidden=0")
+            $updates = @($result.Updates)
+
+            $driverTitles = @()
+            $optionalTitles = @()
+            foreach ($update in $updates) {
+                $isDriver = $false
+                foreach ($category in $update.Categories) {
+                    if ($category.Name -eq 'Drivers') {
+                        $isDriver = $true
+                        break
+                    }
+                }
+
+                $browseOnly = $false
+                try { $browseOnly = [bool]$update.BrowseOnly } catch {}
+
+                if ($isDriver) {
+                    $driverTitles += $update.Title
+                } elseif ($browseOnly) {
+                    $optionalTitles += $update.Title
+                }
+            }
+
+            @{
+                AvailableCount = $updates.Count
+                DriverCount = $driverTitles.Count
+                OptionalCount = $optionalTitles.Count
+                DriverTitles = @($driverTitles | Select-Object -First 5)
+                OptionalTitles = @($optionalTitles | Select-Object -First 5)
+            } | ConvertTo-Json -Depth 3
+        } catch {
+            $null | ConvertTo-Json
+        }
+        """
+
+        available_updates = _run_powershell_json(ps_available_updates, timeout=35)
+
         return {
             "status": "ok",
             "last_update": {
@@ -372,7 +423,12 @@ def collect_windows_update_health() -> Dict[str, Any]:
                 "installed_on": last_update.get("InstalledOn", "Unknown")
             } if last_update else None,
             "failed_updates_last_30_days": int(failed_count),
-            "pending_reboot": pending_reboot
+            "pending_reboot": pending_reboot,
+            "available_updates_count": int((available_updates or {}).get("AvailableCount", 0) or 0),
+            "driver_updates_count": int((available_updates or {}).get("DriverCount", 0) or 0),
+            "optional_updates_count": int((available_updates or {}).get("OptionalCount", 0) or 0),
+            "driver_update_titles": driver_titles,
+            "optional_update_titles": optional_titles,
         }
         
     except Exception as e:

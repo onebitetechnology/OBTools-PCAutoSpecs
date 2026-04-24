@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from urllib.parse import quote
 
-from PySide6.QtCore import Qt, QTimer, Signal, QUrl
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QDateTime
 from PySide6.QtGui import QPalette, QColor, QDesktopServices
 
 from PySide6.QtWidgets import (
@@ -878,23 +878,49 @@ class StartupDialog(QDialog):
         self.reject()
 
 
+class KeyboardTestKeyButton(QPushButton):
+    """Keycap button that supports reset on click and mark-not-present on double click."""
+
+    reset_requested = Signal(str)
+    unavailable_toggled = Signal(str)
+
+    def __init__(self, token, parent=None):
+        super().__init__(token, parent)
+        self._token = token
+        self._suppress_release = False
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton and not self._suppress_release:
+            self.reset_requested.emit(self._token)
+        self._suppress_release = False
+
+    def mouseDoubleClickEvent(self, event):
+        self._suppress_release = True
+        self.unavailable_toggled.emit(self._token)
+        event.accept()
+
+
 class KeyboardTestDialog(QDialog):
     """Interactive onscreen keyboard test used during full scans."""
+
+    DUPLICATE_THRESHOLD_MS = 150
 
     REQUIRED_KEYS = [
         'Esc', '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=',
         'Backspace', 'Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P',
         '[', ']', '\\', 'Caps', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L',
-        ';', "'", 'Enter', 'Shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',',
-        '.', '/', 'Ctrl', 'Alt', 'Space', '←', '↑', '↓', '→',
+        ';', "'", 'Enter', 'LShift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',',
+        '.', '/', 'RShift', 'LCtrl', 'LWin', 'LAlt', 'Space', 'RAlt', 'RWin',
+        'RCtrl', '←', '↑', '↓', '→',
     ]
 
     DISPLAY_ROWS = [
         ['Esc', '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 'Backspace'],
         ['Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '[', ']', '\\'],
         ['Caps', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ';', "'", 'Enter'],
-        ['Shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '/', '↑'],
-        ['Ctrl', 'Alt', 'Space', '←', '↓', '→'],
+        ['LShift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '/', 'RShift', '↑'],
+        ['LCtrl', 'LWin', 'LAlt', 'Space', 'RAlt', 'RWin', 'Menu', 'RCtrl', '←', '↓', '→'],
     ]
 
     KEY_SPANS = {
@@ -902,9 +928,15 @@ class KeyboardTestDialog(QDialog):
         'Tab': 1.5,
         'Caps': 1.8,
         'Enter': 2.0,
-        'Shift': 2.3,
-        'Ctrl': 1.5,
-        'Alt': 1.5,
+        'LShift': 2.3,
+        'RShift': 2.6,
+        'LCtrl': 1.5,
+        'RCtrl': 1.5,
+        'LAlt': 1.5,
+        'RAlt': 1.5,
+        'LWin': 1.5,
+        'RWin': 1.5,
+        'Menu': 1.5,
         'Space': 6.0,
     }
 
@@ -926,6 +958,9 @@ class KeyboardTestDialog(QDialog):
 
         self._required_counts = {key: 0 for key in self.REQUIRED_KEYS}
         self._optional_counts = {}
+        self._duplicate_keys = set()
+        self._unavailable_keys = set()
+        self._last_press_ms = {}
         self._key_labels = {}
         self.result_data = {
             'status': 'skipped',
@@ -934,6 +969,7 @@ class KeyboardTestDialog(QDialog):
             'registered_required_count': 0,
             'missing_keys': [],
             'duplicate_keys': [],
+            'unavailable_keys': [],
             'optional_keys_pressed': [],
         }
 
@@ -959,8 +995,9 @@ class KeyboardTestDialog(QDialog):
         body.setSpacing(14)
 
         instructions = QLabel(
-            "Press each standard key once. Keys start grey, turn green after one press, and turn red if they register multiple times. "
+            "Press each standard key once. Keys start grey, turn green after one clean press, and only turn red for near-instant duplicate bounce/ghost presses. "
             "When you finish, click Complete Keyboard Test to highlight anything that never registered.\n\n"
+            "Click any key to reset it back to grey. Double-click a key to mark it as not present on this keyboard. "
             "Numpad, function keys, and other optional keys are tracked if pressed, but they do not cause the test to fail."
         )
         instructions.setWordWrap(True)
@@ -988,13 +1025,16 @@ class KeyboardTestDialog(QDialog):
             row_layout = QHBoxLayout()
             row_layout.setSpacing(8)
             for token in row_tokens:
-                label = QLabel(token)
-                label.setAlignment(Qt.AlignCenter)
-                label.setFixedHeight(44)
-                label.setMinimumWidth(int(48 * self.KEY_SPANS.get(token, 1.0)))
-                label.setStyleSheet(self._build_key_style(token))
-                self._key_labels[token] = label
-                row_layout.addWidget(label)
+                button = KeyboardTestKeyButton(token)
+                button.setFocusPolicy(Qt.NoFocus)
+                button.setCursor(Qt.PointingHandCursor)
+                button.setFixedHeight(44)
+                button.setMinimumWidth(int(48 * self.KEY_SPANS.get(token, 1.0)))
+                button.setStyleSheet(self._build_key_style(token))
+                button.reset_requested.connect(self._reset_key)
+                button.unavailable_toggled.connect(self._toggle_key_unavailable)
+                self._key_labels[token] = button
+                row_layout.addWidget(button)
             row_layout.addStretch(1)
             keyboard_layout.addLayout(row_layout)
 
@@ -1007,7 +1047,7 @@ class KeyboardTestDialog(QDialog):
         )
         body.addWidget(self._optional_lbl)
 
-        legend = QLabel("Grey = not pressed yet   •   Green = registered once   •   Red = repeated or still missing after completion")
+        legend = QLabel("Grey = untested   •   Green = registered   •   Yellow = not present on this keyboard   •   Red = instant duplicate bounce or missing after completion")
         legend.setStyleSheet(
             f"color: {COLORS['text_tertiary']}; font-size: 9pt;"
         )
@@ -1051,8 +1091,16 @@ class KeyboardTestDialog(QDialog):
             return
 
         if token in self._required_counts:
-            self._required_counts[token] += 1
+            self._unavailable_keys.discard(token)
+            now_ms = int(QDateTime.currentMSecsSinceEpoch())
+            last_ms = self._last_press_ms.get(token)
+            if self._required_counts[token] == 0:
+                self._required_counts[token] = 1
+            elif last_ms is not None and (now_ms - last_ms) <= self.DUPLICATE_THRESHOLD_MS:
+                self._required_counts[token] = max(self._required_counts[token], 2)
+                self._duplicate_keys.add(token)
             self._key_labels[token].setStyleSheet(self._build_key_style(token))
+            self._last_press_ms[token] = now_ms
         else:
             self._optional_counts[token] = self._optional_counts.get(token, 0) + 1
 
@@ -1067,16 +1115,23 @@ class KeyboardTestDialog(QDialog):
             'status': 'skipped',
             'summary': 'Test skipped',
             'required_keys_total': len(self.REQUIRED_KEYS),
-            'registered_required_count': sum(1 for count in self._required_counts.values() if count > 0),
+            'registered_required_count': sum(
+                1 for token, count in self._required_counts.items()
+                if count > 0 or token in self._unavailable_keys
+            ),
             'missing_keys': [],
             'duplicate_keys': [],
+            'unavailable_keys': sorted(self._unavailable_keys),
             'optional_keys_pressed': sorted(self._optional_counts.keys()),
         }
         super().reject()
 
     def _complete_test(self):
-        missing = [token for token, count in self._required_counts.items() if count == 0]
-        duplicates = [token for token, count in self._required_counts.items() if count > 1]
+        missing = [
+            token for token, count in self._required_counts.items()
+            if count == 0 and token not in self._unavailable_keys
+        ]
+        duplicates = sorted(self._duplicate_keys)
 
         for token in missing:
             self._key_labels[token].setStyleSheet(self._build_key_style(token, force_missing=True))
@@ -1098,19 +1153,28 @@ class KeyboardTestDialog(QDialog):
             'status': status,
             'summary': summary,
             'required_keys_total': len(self.REQUIRED_KEYS),
-            'registered_required_count': sum(1 for count in self._required_counts.values() if count > 0),
+            'registered_required_count': sum(
+                1 for token, count in self._required_counts.items()
+                if count > 0 or token in self._unavailable_keys
+            ),
             'missing_keys': missing,
             'duplicate_keys': duplicates,
+            'unavailable_keys': sorted(self._unavailable_keys),
             'optional_keys_pressed': sorted(self._optional_counts.keys()),
         }
         super().accept()
 
     def _refresh_summary(self):
-        pressed = sum(1 for count in self._required_counts.values() if count > 0)
-        repeated = sum(1 for count in self._required_counts.values() if count > 1)
+        pressed = sum(
+            1 for token, count in self._required_counts.items()
+            if count > 0 or token in self._unavailable_keys
+        )
+        repeated = len(self._duplicate_keys)
+        unavailable = len(self._unavailable_keys)
         self._summary_lbl.setText(
             f"Required keys registered: {pressed}/{len(self.REQUIRED_KEYS)}"
-            + (f"  •  repeated keys: {repeated}" if repeated else "")
+            + (f"  •  bounce duplicates: {repeated}" if repeated else "")
+            + (f"  •  marked not present: {unavailable}" if unavailable else "")
         )
 
         if self._optional_counts:
@@ -1121,7 +1185,11 @@ class KeyboardTestDialog(QDialog):
 
     def _build_key_style(self, token, force_missing=False):
         count = self._required_counts.get(token, 0)
-        if force_missing or count == 0:
+        if token in self._unavailable_keys:
+            background = "#92400E"
+            border = "#F59E0B"
+            text = "#FEF3C7"
+        elif force_missing or count == 0:
             background = "#4B5563" if not force_missing else "#991B1B"
             border = "#6B7280" if not force_missing else "#EF4444"
             text = "#F9FAFB"
@@ -1140,9 +1208,47 @@ class KeyboardTestDialog(QDialog):
             "font-size: 10pt; font-weight: bold; padding: 4px 6px;"
         )
 
+    def _reset_key(self, token):
+        if token not in self._required_counts:
+            return
+        self._required_counts[token] = 0
+        self._duplicate_keys.discard(token)
+        self._unavailable_keys.discard(token)
+        self._last_press_ms.pop(token, None)
+        self._key_labels[token].setStyleSheet(self._build_key_style(token))
+        self._refresh_summary()
+        QTimer.singleShot(0, self.setFocus)
+
+    def _toggle_key_unavailable(self, token):
+        if token not in self._required_counts:
+            return
+        if token in self._unavailable_keys:
+            self._unavailable_keys.discard(token)
+        else:
+            self._unavailable_keys.add(token)
+            self._required_counts[token] = 0
+            self._duplicate_keys.discard(token)
+            self._last_press_ms.pop(token, None)
+        self._key_labels[token].setStyleSheet(self._build_key_style(token))
+        self._refresh_summary()
+        QTimer.singleShot(0, self.setFocus)
+
+    @staticmethod
+    def _modifier_token_from_scancode(key, scancode):
+        if key == Qt.Key_Control:
+            return 'RCtrl' if scancode in (285, 3613) else 'LCtrl'
+        if key == Qt.Key_Alt:
+            return 'RAlt' if scancode in (312, 3640) else 'LAlt'
+        if key == Qt.Key_Shift:
+            return 'RShift' if scancode in (54,) else 'LShift'
+        if key == Qt.Key_Meta:
+            return 'RWin' if scancode in (348, 3676) else 'LWin'
+        return None
+
     def _event_to_token(self, event):
         key = event.key()
         modifiers = event.modifiers()
+        scancode = event.nativeScanCode()
 
         if modifiers & Qt.KeypadModifier:
             keypad_map = {
@@ -1161,6 +1267,10 @@ class KeyboardTestDialog(QDialog):
         if Qt.Key_0 <= key <= Qt.Key_9:
             return chr(ord('0') + (key - Qt.Key_0))
 
+        modifier_token = self._modifier_token_from_scancode(key, scancode)
+        if modifier_token:
+            return modifier_token
+
         special_map = {
             Qt.Key_Escape: 'Esc',
             Qt.Key_QuoteLeft: '`',
@@ -1177,12 +1287,11 @@ class KeyboardTestDialog(QDialog):
             Qt.Key_Apostrophe: "'",
             Qt.Key_Return: 'Enter',
             Qt.Key_Enter: 'Enter',
-            Qt.Key_Shift: 'Shift',
             Qt.Key_Comma: ',',
             Qt.Key_Period: '.',
             Qt.Key_Slash: '/',
-            Qt.Key_Control: 'Ctrl',
-            Qt.Key_Alt: 'Alt',
+            Qt.Key_Meta: 'LWin',
+            Qt.Key_Menu: 'Menu',
             Qt.Key_Space: 'Space',
             Qt.Key_Left: '←',
             Qt.Key_Up: '↑',
@@ -2243,12 +2352,13 @@ class ScanSummaryDialog(QDialog):
     If no issues found, shows an all-clear message.
     """
 
-    def __init__(self, issues, parent=None):
+    def __init__(self, issues, specs=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Scan Complete — Summary")
         self.setFixedSize(480, min(120 + len(issues) * 36, 480))
         self.setStyleSheet(f"background-color: {COLORS['bg_root']};")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self._specs = specs or {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2289,6 +2399,17 @@ class ScanSummaryDialog(QDialog):
             ok.setWordWrap(True)
             body.addWidget(ok)
 
+        guidance_lines = self._build_guidance_lines()
+        if guidance_lines:
+            body.addSpacing(8)
+            guidance = QLabel("<br>".join(guidance_lines))
+            guidance.setWordWrap(True)
+            guidance.setOpenExternalLinks(True)
+            guidance.setTextFormat(Qt.RichText)
+            guidance.setStyleSheet(
+                f"color: {COLORS['text_secondary']}; font-size: 10px;")
+            body.addWidget(guidance)
+
         body.addSpacing(8)
 
         # OK button
@@ -2300,6 +2421,34 @@ class ScanSummaryDialog(QDialog):
         body.addWidget(btn)
 
         layout.addLayout(body)
+
+    def _build_guidance_lines(self):
+        lines = []
+        advanced = self._specs.get('AdvancedHealth', {}) if isinstance(self._specs, dict) else {}
+        wu_health = advanced.get('windows_update', {}) if isinstance(advanced, dict) else {}
+        if wu_health.get('status') == 'ok':
+            driver_count = int(wu_health.get('driver_updates_count', 0) or 0)
+            optional_count = int(wu_health.get('optional_updates_count', 0) or 0)
+            if driver_count or optional_count:
+                lines.append(
+                    "Recommended next step: install the available Windows driver / optional updates, reboot if needed, then re-run the scan for updated results."
+                )
+
+        manufacturer = self._specs.get('ManufacturerUpdateTools', {}) if isinstance(self._specs, dict) else {}
+        if manufacturer.get('status') == 'warning':
+            vendor = manufacturer.get('vendor') or manufacturer.get('manufacturer') or 'OEM'
+            url = manufacturer.get('download_url')
+            label = manufacturer.get('download_label') or "manufacturer support tool"
+            if url:
+                lines.append(
+                    f"{vendor} support app is missing. Download <a href=\"{url}\">{label}</a>, run vendor updates, then re-run the scan."
+                )
+            else:
+                lines.append(
+                    f"{vendor} support app is missing. Install the vendor update tool, run updates, then re-run the scan."
+                )
+
+        return lines
 
 
 

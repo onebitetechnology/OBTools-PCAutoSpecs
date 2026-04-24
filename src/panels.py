@@ -1647,6 +1647,29 @@ class SystemInfoPanel(QWidget):
         dlg.add_row("Pending Reboot",
                      "Yes — restart recommended" if pending else "No",
                      color=COLORS['warning'] if pending else None)
+
+        driver_count = int(data.get('driver_updates_count', 0) or 0)
+        optional_count = int(data.get('optional_updates_count', 0) or 0)
+        if driver_count or optional_count:
+            dlg.add_row(
+                "Additional Updates",
+                f"{driver_count} driver, {optional_count} optional",
+                color=COLORS['warning']
+            )
+            driver_titles = data.get('driver_update_titles', []) or []
+            if driver_titles:
+                dlg.add_heading("Driver Updates Available")
+                for title in driver_titles:
+                    dlg.add_text(f"• {title}", color=COLORS['warning'])
+            optional_titles = data.get('optional_update_titles', []) or []
+            if optional_titles:
+                dlg.add_heading("Optional Updates Available")
+                for title in optional_titles:
+                    dlg.add_text(f"• {title}", color=COLORS['warning'])
+            dlg.add_text(
+                "Install the available updates, reboot if required, then re-run the scan for refreshed results.",
+                color=COLORS['warning']
+            )
         dlg.exec()
 
     def _detail_defender(self, data):
@@ -1771,6 +1794,11 @@ class SystemInfoPanel(QWidget):
         if missing:
             dlg.add_heading("Missing Keys")
             dlg.add_text(", ".join(missing), color=COLORS['error'])
+
+        unavailable = data.get('unavailable_keys', []) or []
+        if unavailable:
+            dlg.add_heading("Marked Not Present")
+            dlg.add_text(", ".join(unavailable), color=COLORS['warning'])
 
         duplicates = data.get('duplicate_keys', []) or []
         if duplicates:

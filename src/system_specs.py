@@ -177,6 +177,7 @@ _OEM_UPDATE_TOOL_CATALOG = {
             "name": "Lenovo Vantage",
             "matches": ["lenovo vantage", "commercial vantage"],
             "paths": [],
+            "url": "https://support.lenovo.com/us/en/solutions/ht003029-lenovo-system-update-update-drivers-bios-and-applications",
         },
         {
             "name": "Lenovo System Update",
@@ -185,6 +186,7 @@ _OEM_UPDATE_TOOL_CATALOG = {
                 os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Lenovo", "System Update", "tvsu.exe"),
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Lenovo", "System Update", "tvsu.exe"),
             ],
+            "url": "https://support.lenovo.com/us/en/solutions/ht003029-lenovo-system-update-update-drivers-bios-and-applications",
         },
     ],
     "Dell": [
@@ -196,6 +198,7 @@ _OEM_UPDATE_TOOL_CATALOG = {
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Dell", "CommandUpdate", "dcu-cli.exe"),
                 os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Dell", "CommandUpdate", "dcu-ui.exe"),
             ],
+            "url": "https://www.dell.com/support/home/en-us?app=drivers",
         },
         {
             "name": "Dell SupportAssist",
@@ -204,6 +207,7 @@ _OEM_UPDATE_TOOL_CATALOG = {
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Dell", "SupportAssistAgent", "bin", "SupportAssist.exe"),
                 os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "SupportAssistAgent", "bin", "SupportAssist.exe"),
             ],
+            "url": "https://www.dell.com/support/home/en-us?app=drivers",
         },
     ],
     "HP": [
@@ -214,6 +218,7 @@ _OEM_UPDATE_TOOL_CATALOG = {
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Image Assistant", "HPImageAssistant.exe"),
                 os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Image Assistant", "HPImageAssistant.exe"),
             ],
+            "url": "https://ftp.ext.hp.com/pub/caps-softpaq/cmit/HPIA.html",
         },
         {
             "name": "HP Support Assistant",
@@ -222,6 +227,7 @@ _OEM_UPDATE_TOOL_CATALOG = {
                 os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Hewlett-Packard", "HP Support Framework", "HPSupportAssistant.exe"),
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Hewlett-Packard", "HP Support Framework", "HPSupportAssistant.exe"),
             ],
+            "url": "https://ftp.ext.hp.com/pub/caps-softpaq/cmit/HPIA.html",
         },
     ],
 }
@@ -288,6 +294,8 @@ def _detect_manufacturer_update_tools(com_wmi=None):
 
     catalog = _OEM_UPDATE_TOOL_CATALOG[vendor]
     result["recommended_tools"] = [entry["name"] for entry in catalog]
+    result["download_url"] = catalog[0].get("url")
+    result["download_label"] = catalog[0]["name"]
 
     installed_names = _iter_installed_app_display_names()
     installed_lower = [name.lower() for name in installed_names]
@@ -3280,6 +3288,12 @@ def _get_storage_info(com_wmi):
     storage_details = []
     
     try:
+        ignored_drive_letter = (
+            _get_running_app_drive_letter() if _should_ignore_running_app_drive() else None
+        )
+        if ignored_drive_letter:
+            logging.info(f"Ignoring running app USB drive in storage inventory: {ignored_drive_letter}:")
+
         # Get logical drives (partitions) with usage info - PRIMARY SOURCE
         partitions = psutil.disk_partitions()
         drive_info_map = {}
@@ -3297,6 +3311,8 @@ def _get_storage_info(com_wmi):
                 used_percent = round((usage.used / usage.total) * 100, 1)
                 
                 drive_letter = partition.mountpoint[0] if partition.mountpoint else "?"
+                if ignored_drive_letter and drive_letter.upper() == ignored_drive_letter:
+                    continue
                 file_system = partition.fstype or "Unknown"
                 
                 # Format size
@@ -3372,6 +3388,111 @@ def _get_storage_info(com_wmi):
     except Exception as e:
         logging.warning(f"Failed to get storage info: {e}")
         return "Storage information unavailable"
+
+
+def _get_running_app_drive_letter():
+    """Return the drive letter PC AutoSpec is running from, if any."""
+    if platform.system() != "Windows":
+        return None
+
+    try:
+        from settings import get_app_dir
+        drive, _ = os.path.splitdrive(get_app_dir())
+        if not drive:
+            return None
+        return drive.rstrip(":").upper()
+    except Exception as e:
+        logging.debug(f"Could not determine running app drive letter: {e}")
+        return None
+
+
+def _should_ignore_running_app_drive():
+    """True when the app is running from a removable/USB drive we should ignore."""
+    drive_letter = _get_running_app_drive_letter()
+    if not drive_letter:
+        return False
+
+    drive = f"{drive_letter}:"
+    try:
+        result = subprocess.run(
+            [
+                _POWERSHELL_EXE,
+                "-NoProfile",
+                "-Command",
+                (
+                    f"$logical = Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='{drive}'\" "
+                    "-ErrorAction SilentlyContinue; "
+                    "if (-not $logical) { return }; "
+                    "$partition = @(Get-CimAssociatedInstance -InputObject $logical "
+                    "-ResultClassName Win32_DiskPartition -ErrorAction SilentlyContinue)[0]; "
+                    "$disk = $null; "
+                    "if ($partition) { "
+                    "$disk = @(Get-CimAssociatedInstance -InputObject $partition "
+                    "-ResultClassName Win32_DiskDrive -ErrorAction SilentlyContinue)[0] "
+                    "}; "
+                    "[PSCustomObject]@{ "
+                    "DriveType = [string]$logical.DriveType; "
+                    "InterfaceType = if ($disk) { $disk.InterfaceType } else { '' }; "
+                    "Model = if ($disk) { $disk.Model } else { '' }; "
+                    "PNPDeviceID = if ($disk) { $disk.PNPDeviceID } else { '' } "
+                    "} | ConvertTo-Json -Compress"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+        )
+        payload = json.loads(result.stdout.strip()) if result.stdout.strip() else {}
+        drive_type = str(payload.get("DriveType", "")).strip()
+        interface_type = str(payload.get("InterfaceType", "")).upper()
+        model = str(payload.get("Model", "")).upper()
+        pnp_id = str(payload.get("PNPDeviceID", "")).upper()
+        return (
+            drive_type == "2"
+            or "USB" in interface_type
+            or pnp_id.startswith("USB")
+            or "USB" in model
+        )
+    except Exception as e:
+        logging.debug(f"Could not determine whether running app drive is removable: {e}")
+        return False
+
+
+def _get_disk_drive_letters(disk_index):
+    """Return logical drive letters associated with a physical disk index."""
+    if platform.system() != "Windows" or disk_index is None:
+        return set()
+
+    try:
+        result = subprocess.run(
+            [
+                _POWERSHELL_EXE,
+                "-NoProfile",
+                "-Command",
+                (
+                    f"Get-Partition -DiskNumber {disk_index} -ErrorAction SilentlyContinue | "
+                    "Where-Object { $_.DriveLetter } | "
+                    "Select-Object -ExpandProperty DriveLetter | "
+                    "ConvertTo-Json -Compress"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+        )
+        raw = result.stdout.strip()
+        if not raw:
+            return set()
+        data = json.loads(raw)
+        if isinstance(data, str):
+            return {data.upper()}
+        if isinstance(data, list):
+            return {str(item).upper() for item in data if item}
+    except Exception as e:
+        logging.debug(f"Could not get drive letters for disk {disk_index}: {e}")
+    return set()
 
 
 def _get_disk_bus_type(disk_index):
@@ -4703,6 +4824,9 @@ def _get_storage_health_structured(com_wmi):
     drives = []
     
     try:
+        ignored_drive_letter = (
+            _get_running_app_drive_letter() if _should_ignore_running_app_drive() else None
+        )
         if com_wmi:
             try:
                 items = _query_com_wmi(com_wmi, "Win32_DiskDrive")
@@ -4715,6 +4839,15 @@ def _get_storage_health_structured(com_wmi):
                         
                         if not model or not size or int(size) == 0:
                             continue
+
+                        if ignored_drive_letter:
+                            disk_letters = _get_disk_drive_letters(disk_index)
+                            if ignored_drive_letter in disk_letters:
+                                logging.info(
+                                    f"Ignoring running app USB disk in SMART/health scan: "
+                                    f"disk {disk_index} ({model})"
+                                )
+                                continue
                         
                         drive_model = model.strip()
                         drive_size_gb = round(int(size) / (1024**3), 1) if size else 0

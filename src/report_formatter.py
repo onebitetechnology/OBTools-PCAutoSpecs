@@ -533,6 +533,27 @@ class ReportFormatter:
         if 'device_manager' not in skip_cats and device_errors:
             issues.append(f"Device Manager: {len(device_errors)} devices with driver errors")
 
+        wu_health = specs.get('AdvancedHealth', {}).get('windows_update', {})
+        if 'windows_update' not in skip_cats and wu_health.get('status') == 'ok':
+            driver_count = int(wu_health.get('driver_updates_count', 0) or 0)
+            optional_count = int(wu_health.get('optional_updates_count', 0) or 0)
+            if driver_count or optional_count:
+                bits = []
+                if driver_count:
+                    bits.append(f"{driver_count} driver")
+                if optional_count:
+                    bits.append(f"{optional_count} optional")
+                issues.append(
+                    f"Windows Update: {', '.join(bits)} update(s) available — install updates and re-run scan"
+                )
+
+        manufacturer_tools = specs.get('ManufacturerUpdateTools', {}) or {}
+        if 'manufacturer_updates' not in skip_cats and manufacturer_tools.get('status') == 'warning':
+            vendor = manufacturer_tools.get('vendor') or manufacturer_tools.get('manufacturer') or 'OEM'
+            issues.append(
+                f"Manufacturer Update Tools: {vendor} support app missing — install it and check OEM driver / BIOS updates"
+            )
+
         # CPU/RAM usage
         system_health = specs.get('SystemHealth', '')
         if system_health:
@@ -706,6 +727,27 @@ class ReportFormatter:
         device_errors = specs.get('DeviceManagerErrors', [])
         if 'device_manager' not in skip_cats and device_errors:
             issues.append(f"Device Manager: {len(device_errors)} devices with driver errors")
+
+        wu_health = specs.get('AdvancedHealth', {}).get('windows_update', {})
+        if 'windows_update' not in skip_cats and wu_health.get('status') == 'ok':
+            driver_count = int(wu_health.get('driver_updates_count', 0) or 0)
+            optional_count = int(wu_health.get('optional_updates_count', 0) or 0)
+            if driver_count or optional_count:
+                bits = []
+                if driver_count:
+                    bits.append(f"{driver_count} driver")
+                if optional_count:
+                    bits.append(f"{optional_count} optional")
+                issues.append(
+                    f"Windows Update: {', '.join(bits)} update(s) available - install updates and re-run scan"
+                )
+
+        manufacturer_tools = specs.get('ManufacturerUpdateTools', {}) or {}
+        if 'manufacturer_updates' not in skip_cats and manufacturer_tools.get('status') == 'warning':
+            vendor = manufacturer_tools.get('vendor') or manufacturer_tools.get('manufacturer') or 'OEM'
+            issues.append(
+                f"Manufacturer Update Tools: {vendor} support app missing - install it and check OEM driver / BIOS updates"
+            )
 
         # Check for high CPU usage - SystemHealth is a string, parse it
         system_health = specs.get('SystemHealth', '')
@@ -1981,6 +2023,16 @@ class ReportFormatter:
                 if wu_health.get('pending_reboot')
                 else "  - Pending reboot: No"
             )
+            driver_count = int(wu_health.get('driver_updates_count', 0) or 0)
+            optional_count = int(wu_health.get('optional_updates_count', 0) or 0)
+            if driver_count or optional_count:
+                lines.append(
+                    f"  - Additional updates available: {driver_count} driver, {optional_count} optional"
+                )
+                for title in (wu_health.get('driver_update_titles') or [])[:5]:
+                    lines.append(f"    • Driver: {title}")
+                for title in (wu_health.get('optional_update_titles') or [])[:5]:
+                    lines.append(f"    • Optional: {title}")
 
         manufacturer_tools = specs.get('ManufacturerUpdateTools', {}) or {}
         if 'manufacturer_updates' in skip_cats:
