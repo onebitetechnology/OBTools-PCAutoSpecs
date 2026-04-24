@@ -232,6 +232,13 @@ _OEM_UPDATE_TOOL_CATALOG = {
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Hewlett-Packard", "HP Support Framework", "HPSF.exe"),
                 os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Support Framework", "HPSF.exe"),
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Support Framework", "HPSF.exe"),
+                os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Microsoft", "Windows", "Start Menu", "Programs", "HP Help and Support", "HP Support Assistant.lnk"),
+                os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Microsoft", "Windows", "Start Menu", "Programs", "HP", "HP Support Assistant.lnk"),
+            ],
+            "service_keys": [
+                "HPSA_Service",
+                "HPAppHelperCap",
+                "HPSupportSolutionsFrameworkService",
             ],
             "url": "https://support.hp.com/help/hp-support-assistant",
         },
@@ -283,6 +290,20 @@ def _iter_installed_app_display_names():
     return names
 
 
+def _service_key_exists(service_name):
+    """True if a Windows service registry key exists."""
+    if platform.system() != "Windows" or not winreg or not service_name:
+        return False
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            fr"SYSTEM\CurrentControlSet\Services\{service_name}"
+        ):
+            return True
+    except OSError:
+        return False
+
+
 def _detect_manufacturer_update_tools(com_wmi=None):
     """Detect OEM-specific driver/BIOS update utilities for refurb workflows."""
     identity = _get_computer_system_identity(com_wmi)
@@ -327,6 +348,11 @@ def _detect_manufacturer_update_tools(com_wmi=None):
             for path in entry.get("paths", []):
                 if path and os.path.isfile(path):
                     matched_name = f"{entry['name']} (detected by executable)"
+                    break
+        if not matched_name:
+            for service_key in entry.get("service_keys", []):
+                if _service_key_exists(service_key):
+                    matched_name = f"{entry['name']} (detected by service)"
                     break
         if matched_name:
             found_tools.append(entry["name"])

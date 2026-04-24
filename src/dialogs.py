@@ -912,12 +912,13 @@ class KeyboardTestDialog(QDialog):
         'Backspace', 'Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P',
         '[', ']', '\\', 'Caps', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L',
         ';', "'", 'Enter', 'LShift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',',
-        '.', '/', 'RShift', 'LCtrl', 'LWin', 'LAlt', 'Space', 'RAlt', 'RWin',
-        'RCtrl', '←', '↑', '↓', '→',
+        '.', '/', 'RShift', 'LCtrl', 'LAlt', 'Space', 'RAlt', 'RCtrl',
+        '←', '↑', '↓', '→',
     ]
 
     DISPLAY_ROWS = [
         ['Esc', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'],
+        ['Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown'],
         ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 'Backspace'],
         ['Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '[', ']', '\\'],
         ['Caps', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ';', "'", 'Enter'],
@@ -939,6 +940,12 @@ class KeyboardTestDialog(QDialog):
         'LWin': 1.5,
         'RWin': 1.5,
         'Menu': 1.5,
+        'Insert': 1.4,
+        'Delete': 1.4,
+        'Home': 1.4,
+        'End': 1.4,
+        'PageUp': 1.6,
+        'PageDown': 1.8,
         'Space': 6.0,
     }
 
@@ -1105,6 +1112,10 @@ class KeyboardTestDialog(QDialog):
             self._last_press_ms[token] = now_ms
         else:
             self._optional_counts[token] = self._optional_counts.get(token, 0) + 1
+            self._unavailable_keys.discard(token)
+            if token in self._key_labels:
+                self._key_labels[token].setStyleSheet(self._build_key_style(token))
+            self._last_press_ms[token] = int(QDateTime.currentMSecsSinceEpoch())
 
         self._refresh_summary()
         event.accept()
@@ -1241,29 +1252,32 @@ class KeyboardTestDialog(QDialog):
 
     @staticmethod
     def _modifier_token_from_native_codes(key, scancode, virtual_key):
+        if virtual_key == 0xA3:
+            return 'RCtrl'
+        if virtual_key == 0xA2:
+            return 'LCtrl'
+        if virtual_key == 0xA5:
+            return 'RAlt'
+        if virtual_key == 0xA4:
+            return 'LAlt'
+        if virtual_key == 0xA1:
+            return 'RShift'
+        if virtual_key == 0xA0:
+            return 'LShift'
+        if virtual_key == 0x5C:
+            return 'RWin'
+        if virtual_key == 0x5B:
+            return 'LWin'
+
         if key == Qt.Key_Control:
-            if virtual_key == 0xA3:
-                return 'RCtrl'
-            if virtual_key == 0xA2:
-                return 'LCtrl'
             return 'RCtrl' if scancode in (285, 3613) else 'LCtrl'
         if key == Qt.Key_Alt:
-            if virtual_key == 0xA5:
-                return 'RAlt'
-            if virtual_key == 0xA4:
-                return 'LAlt'
             return 'RAlt' if scancode in (312, 3640) else 'LAlt'
+        if key == Qt.Key_AltGr:
+            return 'RAlt'
         if key == Qt.Key_Shift:
-            if virtual_key == 0xA1:
-                return 'RShift'
-            if virtual_key == 0xA0:
-                return 'LShift'
             return 'RShift' if scancode in (54,) else 'LShift'
         if key == Qt.Key_Meta:
-            if virtual_key == 0x5C:
-                return 'RWin'
-            if virtual_key == 0x5B:
-                return 'LWin'
             if scancode in (348, 3676):
                 return 'RWin'
             if scancode in (347, 3675):

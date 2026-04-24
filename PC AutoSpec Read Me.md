@@ -238,6 +238,8 @@ Numpad and some optional keys are treated as optional, so the test does not fail
 
 The onscreen layout also includes the top function row for visibility, but OEM-remapped hotkeys can still behave differently on some laptops. If a key is present on-screen but not physically usable on that keyboard, double-click it to mark it as not present.
 
+The popup also includes common navigation keys like Insert, Delete, Home, End, Page Up, and Page Down when present on the keyboard layout.
+
 The result appears:
 - in the app UI
 - in the HTML upload
@@ -303,6 +305,8 @@ It currently looks for OEM update tools such as:
 - Lenovo Vantage / Lenovo System Update
 - Dell Command Update / SupportAssist
 - HP Support Assistant / HP Image Assistant
+
+HP detection also checks common HP support framework executables, start menu shortcuts, and service registrations, because Support Assistant is not always exposed through the normal installed-apps list.
 
 This check tells you whether the relevant manufacturer tool is installed.
 
