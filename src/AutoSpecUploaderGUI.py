@@ -822,6 +822,15 @@ class MainWindow(QMainWindow):
         self._apply_keyboard_test_result(result)
         self._finalize_scan_ready_state()
 
+    def rerun_keyboard_test_from_details(self):
+        self._log_panel.append("  Re-running Keyboard Test from details view...\n", 'muted')
+        dlg = KeyboardTestDialog(parent=self)
+        dlg.exec()
+
+        result = dlg.result_data or {'status': 'skipped', 'summary': 'Test skipped'}
+        self._apply_keyboard_test_result(result)
+        return result
+
     def _apply_keyboard_test_result(self, result):
         self._system_specs.setdefault('AdvancedDiagnostics', {})
         self._system_specs.setdefault('AdvancedHealth', {})
@@ -1294,6 +1303,7 @@ class MainWindow(QMainWindow):
                 f"PC AutoSpec {latest} is ready to apply.\n\n"
                 "The portable update will replace the app files on the USB after PC AutoSpec closes.\n"
                 "It will not register PC AutoSpec as an installed app on this machine.\n"
+                "PC AutoSpec should reopen automatically when the portable update finishes.\n\n"
                 "Apply it now?"
             )
         else:

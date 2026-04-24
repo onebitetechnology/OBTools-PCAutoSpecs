@@ -423,6 +423,7 @@ def launch_pending_update(
     package_path: str,
     install_dir: Optional[str] = None,
     app_pid: Optional[int] = None,
+    relaunch_executable: Optional[str] = None,
 ) -> None:
     """
     Launch the update package after the app exits.
@@ -445,6 +446,9 @@ def launch_pending_update(
     install_dir = str(Path(install_dir).resolve()) if install_dir else ""
     if app_pid is None:
         app_pid = os.getpid()
+    if relaunch_executable is None and getattr(sys, 'frozen', False):
+        relaunch_executable = sys.executable
+    relaunch_executable = str(Path(relaunch_executable).resolve()) if relaunch_executable else ""
 
     if package.suffix.lower() == ".zip":
         if not install_dir:
@@ -458,6 +462,7 @@ def launch_pending_update(
         stage_path = str(staging_dir).replace("'", "''")
         pending_path = str(pending_metadata).replace("'", "''")
         apply_log_path = str(log_path).replace("'", "''")
+        relaunch_path = relaunch_executable.replace("'", "''") if relaunch_executable else ""
         powershell_cmd = (
             "$ErrorActionPreference = 'Stop'; "
             f"$pidToWait = {int(app_pid)}; "
@@ -472,6 +477,7 @@ def launch_pending_update(
             f"$stage = '{stage_path}'; "
             f"$pending = '{pending_path}'; "
             f"$log = '{apply_log_path}'; "
+            f"$relaunch = '{relaunch_path}'; "
             "'Starting portable update apply' | Out-File -FilePath $log -Encoding utf8 -Append; "
             "if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }; "
             "New-Item -ItemType Directory -Path $stage | Out-Null; "
@@ -482,11 +488,16 @@ def launch_pending_update(
             "if ($LASTEXITCODE -gt 7) { throw ('Robocopy failed with exit code ' + $LASTEXITCODE) }; "
             "if (Test-Path $pending) { Remove-Item $pending -Force -ErrorAction SilentlyContinue }; "
             "'Portable update apply complete' | Out-File -FilePath $log -Encoding utf8 -Append; "
+            "if ($relaunch -and (Test-Path $relaunch)) { "
+            "Start-Sleep -Seconds 1; "
+            "Start-Process -FilePath $relaunch -WorkingDirectory $dest | Out-Null; "
+            "'Relaunched PC AutoSpec after portable update' | Out-File -FilePath $log -Encoding utf8 -Append "
+            "} "
             "Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue"
         )
         launcher_script.write_text(
             "@echo off\n"
-            f"powershell -NoProfile -ExecutionPolicy Bypass -Command \"{powershell_cmd}\"\n"
+            f"powershell -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"{powershell_cmd}\"\n"
             'del "%~f0"\n',
             encoding="utf-8",
         )
@@ -496,7 +507,7 @@ def launch_pending_update(
             installer_cmd += f' /DIR="{install_dir}"'
         launcher_script.write_text(
             "@echo off\n"
-            f"powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+            f"powershell -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command \""
             f"$pidToWait = {int(app_pid)}; "
             "$deadline = (Get-Date).AddMinutes(2); "
             "while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) { "

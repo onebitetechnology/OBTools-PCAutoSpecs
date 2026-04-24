@@ -236,10 +236,14 @@ Result logic:
 
 Numpad and some optional keys are treated as optional, so the test does not fail just because the keyboard does not physically include them.
 
+The onscreen layout also includes the top function row for visibility, but OEM-remapped hotkeys can still behave differently on some laptops. If a key is present on-screen but not physically usable on that keyboard, double-click it to mark it as not present.
+
 The result appears:
 - in the app UI
 - in the HTML upload
 - in critical issues when there is a keyboard problem
+
+After a scan, you can also open the `Keyboard Test` result under `Advanced Diagnostics` and run the keyboard test again from scratch. The newest result replaces the old one in both the UI and the upload preview.
 
 ### Network & WiFi
 
@@ -298,7 +302,7 @@ This is a refurb-oriented check.
 It currently looks for OEM update tools such as:
 - Lenovo Vantage / Lenovo System Update
 - Dell Command Update / SupportAssist
-- HP Image Assistant / HP Support Assistant
+- HP Support Assistant / HP Image Assistant
 
 This check tells you whether the relevant manufacturer tool is installed.
 

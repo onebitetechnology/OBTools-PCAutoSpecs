@@ -9,6 +9,7 @@ import os
 import platform
 import re
 import logging
+import sys
 from pathlib import Path
 from urllib.parse import quote
 
@@ -916,7 +917,8 @@ class KeyboardTestDialog(QDialog):
     ]
 
     DISPLAY_ROWS = [
-        ['Esc', '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 'Backspace'],
+        ['Esc', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'],
+        ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 'Backspace'],
         ['Tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '[', ']', '\\'],
         ['Caps', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ';', "'", 'Enter'],
         ['LShift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '/', 'RShift', '↑'],
@@ -998,7 +1000,7 @@ class KeyboardTestDialog(QDialog):
             "Press each standard key once. Keys start grey, turn green after one clean press, and only turn red for near-instant duplicate bounce/ghost presses. "
             "When you finish, click Complete Keyboard Test to highlight anything that never registered.\n\n"
             "Click any key to reset it back to grey. Double-click a key to mark it as not present on this keyboard. "
-            "Numpad, function keys, and other optional keys are tracked if pressed, but they do not cause the test to fail."
+            "Function-row keys shown here are optional and will not fail the test if they are absent or remapped by the OEM."
         )
         instructions.setWordWrap(True)
         instructions.setStyleSheet(
@@ -1184,7 +1186,7 @@ class KeyboardTestDialog(QDialog):
             self._optional_lbl.setText("Optional keys pressed: None yet")
 
     def _build_key_style(self, token, force_missing=False):
-        count = self._required_counts.get(token, 0)
+        count = self._required_counts.get(token, self._optional_counts.get(token, 0))
         if token in self._unavailable_keys:
             background = "#92400E"
             border = "#F59E0B"
@@ -1209,9 +1211,11 @@ class KeyboardTestDialog(QDialog):
         )
 
     def _reset_key(self, token):
-        if token not in self._required_counts:
+        if token not in self._key_labels:
             return
-        self._required_counts[token] = 0
+        if token in self._required_counts:
+            self._required_counts[token] = 0
+        self._optional_counts.pop(token, None)
         self._duplicate_keys.discard(token)
         self._unavailable_keys.discard(token)
         self._last_press_ms.pop(token, None)
@@ -1220,13 +1224,15 @@ class KeyboardTestDialog(QDialog):
         QTimer.singleShot(0, self.setFocus)
 
     def _toggle_key_unavailable(self, token):
-        if token not in self._required_counts:
+        if token not in self._key_labels:
             return
         if token in self._unavailable_keys:
             self._unavailable_keys.discard(token)
         else:
             self._unavailable_keys.add(token)
-            self._required_counts[token] = 0
+            if token in self._required_counts:
+                self._required_counts[token] = 0
+            self._optional_counts.pop(token, None)
             self._duplicate_keys.discard(token)
             self._last_press_ms.pop(token, None)
         self._key_labels[token].setStyleSheet(self._build_key_style(token))
@@ -1234,21 +1240,42 @@ class KeyboardTestDialog(QDialog):
         QTimer.singleShot(0, self.setFocus)
 
     @staticmethod
-    def _modifier_token_from_scancode(key, scancode):
+    def _modifier_token_from_native_codes(key, scancode, virtual_key):
         if key == Qt.Key_Control:
+            if virtual_key == 0xA3:
+                return 'RCtrl'
+            if virtual_key == 0xA2:
+                return 'LCtrl'
             return 'RCtrl' if scancode in (285, 3613) else 'LCtrl'
         if key == Qt.Key_Alt:
+            if virtual_key == 0xA5:
+                return 'RAlt'
+            if virtual_key == 0xA4:
+                return 'LAlt'
             return 'RAlt' if scancode in (312, 3640) else 'LAlt'
         if key == Qt.Key_Shift:
+            if virtual_key == 0xA1:
+                return 'RShift'
+            if virtual_key == 0xA0:
+                return 'LShift'
             return 'RShift' if scancode in (54,) else 'LShift'
         if key == Qt.Key_Meta:
-            return 'RWin' if scancode in (348, 3676) else 'LWin'
+            if virtual_key == 0x5C:
+                return 'RWin'
+            if virtual_key == 0x5B:
+                return 'LWin'
+            if scancode in (348, 3676):
+                return 'RWin'
+            if scancode in (347, 3675):
+                return 'LWin'
+            return None
         return None
 
     def _event_to_token(self, event):
         key = event.key()
         modifiers = event.modifiers()
         scancode = event.nativeScanCode()
+        virtual_key = event.nativeVirtualKey()
 
         if modifiers & Qt.KeypadModifier:
             keypad_map = {
@@ -1267,7 +1294,7 @@ class KeyboardTestDialog(QDialog):
         if Qt.Key_0 <= key <= Qt.Key_9:
             return chr(ord('0') + (key - Qt.Key_0))
 
-        modifier_token = self._modifier_token_from_scancode(key, scancode)
+        modifier_token = self._modifier_token_from_native_codes(key, scancode, virtual_key)
         if modifier_token:
             return modifier_token
 
@@ -1290,7 +1317,6 @@ class KeyboardTestDialog(QDialog):
             Qt.Key_Comma: ',',
             Qt.Key_Period: '.',
             Qt.Key_Slash: '/',
-            Qt.Key_Meta: 'LWin',
             Qt.Key_Menu: 'Menu',
             Qt.Key_Space: 'Space',
             Qt.Key_Left: '←',
@@ -1776,11 +1802,12 @@ class DetailDialog(QDialog):
         btn_bar = QHBoxLayout()
         btn_bar.setContentsMargins(20, 8, 20, 16)
         btn_bar.addStretch()
+        self._btn_bar = btn_bar
         close_btn = QPushButton("Close")
         close_btn.setObjectName("secondary")
         close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.clicked.connect(self.close)
-        btn_bar.addWidget(close_btn)
+        self._btn_bar.addWidget(close_btn)
         outer.addLayout(btn_bar)
 
     def add_row(self, label, value, color=None):
@@ -1841,6 +1868,16 @@ class DetailDialog(QDialog):
         sep.setStyleSheet(
             f"background-color: {COLORS['border']}; border: none;")
         self._content_layout.addWidget(sep)
+
+    def add_action_button(self, label, callback, object_name="primary"):
+        """Add an action button to the footer before the Close button."""
+        btn = QPushButton(label)
+        btn.setObjectName(object_name)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(callback)
+        insert_at = max(0, self._btn_bar.count() - 1)
+        self._btn_bar.insertWidget(insert_at, btn)
+        return btn
 
 
 # ─── Report Preview Dialog ───────────────────────────────────────────
@@ -3132,6 +3169,18 @@ class SettingsDialog(QDialog):
             Path(get_app_dir()) / README_FILENAME,
             Path(get_app_dir()) / "README.md",
         ]
+        if getattr(sys, 'frozen', False):
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates.extend([
+                exe_dir / README_FILENAME,
+                exe_dir / "README.md",
+            ])
+            if hasattr(sys, '_MEIPASS'):
+                meipass_dir = Path(sys._MEIPASS)
+                candidates.extend([
+                    meipass_dir / README_FILENAME,
+                    meipass_dir / "README.md",
+                ])
         for candidate in candidates:
             if candidate.is_file():
                 return candidate
@@ -3428,6 +3477,7 @@ class SettingsDialog(QDialog):
                 "The downloaded portable update will replace the app files in the folder "
                 "PC AutoSpec is currently running from after the app closes.\n\n"
                 "It will not register PC AutoSpec as an installed app on this machine.\n\n"
+                "PC AutoSpec should reopen automatically when the portable update finishes.\n\n"
                 "Save any work first, then continue."
             )
         else:

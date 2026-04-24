@@ -212,20 +212,35 @@ _OEM_UPDATE_TOOL_CATALOG = {
     ],
     "HP": [
         {
+            "name": "HP Support Assistant",
+            "matches": [
+                "hp support assistant",
+                "hp support solutions framework",
+                "hp support framework",
+                "hp support solutions",
+            ],
+            "paths": [
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Support Assistant", "HPSA.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Support Assistant", "HPSA.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Support Assistant", "HPSupportAssistant.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Support Assistant", "HPSupportAssistant.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Hewlett-Packard", "HP Support Framework", "HPSupportAssistant.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Hewlett-Packard", "HP Support Framework", "HPSupportAssistant.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Support Framework", "HPSupportAssistant.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Support Framework", "HPSupportAssistant.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Hewlett-Packard", "HP Support Framework", "HPSF.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Hewlett-Packard", "HP Support Framework", "HPSF.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Support Framework", "HPSF.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Support Framework", "HPSF.exe"),
+            ],
+            "url": "https://support.hp.com/help/hp-support-assistant",
+        },
+        {
             "name": "HP Image Assistant",
             "matches": ["hp image assistant"],
             "paths": [
                 os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "HP", "HP Image Assistant", "HPImageAssistant.exe"),
                 os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "HP", "HP Image Assistant", "HPImageAssistant.exe"),
-            ],
-            "url": "https://ftp.ext.hp.com/pub/caps-softpaq/cmit/HPIA.html",
-        },
-        {
-            "name": "HP Support Assistant",
-            "matches": ["hp support assistant"],
-            "paths": [
-                os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Hewlett-Packard", "HP Support Framework", "HPSupportAssistant.exe"),
-                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Hewlett-Packard", "HP Support Framework", "HPSupportAssistant.exe"),
             ],
             "url": "https://ftp.ext.hp.com/pub/caps-softpaq/cmit/HPIA.html",
         },

@@ -1810,6 +1810,14 @@ class SystemInfoPanel(QWidget):
             dlg.add_heading("Optional Keys Pressed")
             dlg.add_text(", ".join(optional), color=COLORS['text_secondary'])
 
+        main_window = self.window()
+        if hasattr(main_window, 'rerun_keyboard_test_from_details'):
+            def _rerun():
+                dlg.close()
+                QTimer.singleShot(0, main_window.rerun_keyboard_test_from_details)
+
+            dlg.add_action_button("Re-run Keyboard Test", _rerun, object_name="primary")
+
         dlg.exec()
 
     def _detail_manufacturer_updates(self, data):
