@@ -1259,27 +1259,25 @@ class SystemInfoPanel(QWidget):
         if not bd or not isinstance(bd, dict):
             return
 
-        # Model
-        model_name = (bd.get('model_name', '') or '').strip()
-        manufacturer = (bd.get('manufacturer', '') or '').strip()
-        generic = ('Primary', 'Microsoft', 'Unknown', '-', 'N/A',
-                   'Not Available')
-        if model_name in generic:
-            model_name = ''
+        # Best battery identifier for ordering / reference
+        def _clean_battery_identifier(value):
+            text = (value or '').strip()
+            generic = ('Primary', 'Microsoft', 'Unknown', '-', 'N/A',
+                       'Not Available', 'BIF0_9')
+            return '' if text in generic else text
 
-        if model_name or manufacturer:
-            bat_id = model_name
+        model_name = _clean_battery_identifier(bd.get('model_name', ''))
+        unique_id = _clean_battery_identifier(bd.get('unique_id', ''))
+        manufacturer = (bd.get('manufacturer', '') or '').strip()
+        battery_identifier = unique_id or model_name
+
+        if battery_identifier or manufacturer:
+            bat_id = battery_identifier
             if manufacturer:
                 bat_id += f" by {manufacturer}" if bat_id else manufacturer
-            if not model_name and manufacturer:
+            if not battery_identifier and manufacturer:
                 bat_id = f"Battery by {manufacturer}"
             sec.add_info_row('Model', bat_id)
-
-        # Serial
-        serial = (bd.get('serial_number', '') or '').strip()
-        if serial and serial not in ('-', '', 'N/A', 'Unknown', '0',
-                                     'Not Available'):
-            sec.add_info_row('Serial Number', serial)
 
         if bd.get('chemistry'):
             sec.add_info_row('Chemistry', bd['chemistry'])

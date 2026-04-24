@@ -5831,6 +5831,9 @@ def _get_battery_details(com_wmi):
                 
                 # Try BatteryStaticData first (best chance for serial number)
                 if static_data:
+                    if static_data.get('unique_id') and static_data['unique_id'].strip():
+                        details['unique_id'] = static_data['unique_id'].strip()
+
                     if static_data.get('serial_number') and static_data['serial_number'].strip():
                         details['serial_number'] = static_data['serial_number'].strip()
                         logging.info(f"Battery serial from BatteryStaticData: {details['serial_number']}")

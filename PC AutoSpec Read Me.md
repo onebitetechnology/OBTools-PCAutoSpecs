@@ -278,6 +278,11 @@ Collects:
 - estimated runtime when available
 
 Battery capacities prefer watt-hour values when available.
+The battery line now prefers the best battery part/reference identifier Windows exposes, instead of only showing a generic battery device name when a better identifier is available.
+
+Battery health now surfaces in `Critical Issues` too:
+- below `80%` health = warning
+- below `70%` health = critical
 
 ### Event Logs
 

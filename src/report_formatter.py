@@ -554,6 +554,23 @@ class ReportFormatter:
                 f"Manufacturer Update Tools: {vendor} support app missing — install it and check OEM driver / BIOS updates"
             )
 
+        # Battery health
+        battery_details = specs.get('BatteryDetails') or {}
+        if 'battery' not in skip_cats and battery_details.get('health_percent') is not None:
+            try:
+                health = float(battery_details.get('health_percent'))
+            except (TypeError, ValueError):
+                health = None
+            if health is not None:
+                if health < 70:
+                    issues.append(
+                        f"Battery Health: CRITICAL ({health:.0f}% health — replacement recommended)"
+                    )
+                elif health < 80:
+                    issues.append(
+                        f"Battery Health: WARNING ({health:.0f}% health — monitor and plan replacement)"
+                    )
+
         # CPU/RAM usage
         system_health = specs.get('SystemHealth', '')
         if system_health:
@@ -748,6 +765,23 @@ class ReportFormatter:
             issues.append(
                 f"Manufacturer Update Tools: {vendor} support app missing - install it and check OEM driver / BIOS updates"
             )
+
+        # Battery health
+        battery_details = specs.get('BatteryDetails') or {}
+        if 'battery' not in skip_cats and battery_details.get('health_percent') is not None:
+            try:
+                health = float(battery_details.get('health_percent'))
+            except (TypeError, ValueError):
+                health = None
+            if health is not None:
+                if health < 70:
+                    issues.append(
+                        f"Battery Health: CRITICAL ({health:.0f}% health - replacement recommended)"
+                    )
+                elif health < 80:
+                    issues.append(
+                        f"Battery Health: WARNING ({health:.0f}% health - monitor and plan replacement)"
+                    )
 
         # Check for high CPU usage - SystemHealth is a string, parse it
         system_health = specs.get('SystemHealth', '')
@@ -1661,6 +1695,21 @@ class ReportFormatter:
             return lines
         return []
 
+    @staticmethod
+    def _get_battery_display_identifier(battery_details):
+        """Return the most useful battery part/reference identifier we have."""
+        if not isinstance(battery_details, dict):
+            return ""
+
+        def _clean(value):
+            text = str(value or "").strip()
+            generic = {"", "Primary", "Microsoft", "Unknown", "-", "N/A", "Not Available", "BIF0_9"}
+            return "" if text in generic else text
+
+        unique_id = _clean(battery_details.get('unique_id'))
+        model_name = _clean(battery_details.get('model_name'))
+        return unique_id or model_name
+
     def _format_battery_config(self, specs):
         """Format battery information section for laptops"""
         lines = []
@@ -1684,17 +1733,13 @@ class ReportFormatter:
 
         if battery_details:
             # Battery Model and Manufacturer
-            if battery_details.get('model_name') or battery_details.get('manufacturer'):
-                model = battery_details.get('model_name', 'Unknown')
-                manufacturer = battery_details.get('manufacturer', '')
+            model = self._get_battery_display_identifier(battery_details)
+            manufacturer = battery_details.get('manufacturer', '')
+            if model or manufacturer:
                 if manufacturer:
                     lines.append(f"<strong>Battery:</strong> {model} ({manufacturer})")
                 else:
                     lines.append(f"<strong>Battery:</strong> {model}")
-
-            # Serial Number
-            if battery_details.get('serial_number'):
-                lines.append(f"<strong>Serial Number:</strong> {battery_details['serial_number']}")
 
             # Chemistry
             if battery_details.get('chemistry'):

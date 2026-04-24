@@ -490,7 +490,7 @@ def launch_pending_update(
             "'Portable update apply complete' | Out-File -FilePath $log -Encoding utf8 -Append\n"
             "if ($relaunch -and (Test-Path $relaunch)) {\n"
             "    Start-Sleep -Seconds 1\n"
-            "    Start-Process -FilePath $relaunch -WorkingDirectory $dest | Out-Null\n"
+            "    Start-Process -FilePath $relaunch -WorkingDirectory $dest -WindowStyle Normal | Out-Null\n"
             "    'Relaunched PC AutoSpec after portable update' | Out-File -FilePath $log -Encoding utf8 -Append\n"
             "}\n"
             "Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue\n"

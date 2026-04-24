@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 import requests
 
@@ -64,16 +65,45 @@ class RepairDeskAPI:
                 raise Exception("No RepairDesk API key configured.")
             params["api_key"] = key
 
-        response = requests.request(
-            method,
-            url,
-            params=params,
-            json=json_payload,
-            headers=headers,
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        return response
+        attempts = 3
+        last_response = None
+        for attempt in range(1, attempts + 1):
+            response = requests.request(
+                method,
+                url,
+                params=params,
+                json=json_payload,
+                headers=headers,
+                timeout=timeout,
+            )
+            last_response = response
+
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response
+
+            if attempt >= attempts:
+                break
+
+            retry_after = response.headers.get("Retry-After")
+            try:
+                wait_seconds = float(retry_after) if retry_after else 1.0 * attempt
+            except (TypeError, ValueError):
+                wait_seconds = 1.0 * attempt
+            wait_seconds = max(0.5, min(wait_seconds, 5.0))
+            logging.warning(
+                "RepairDesk rate limit hit (%s %s), retrying in %.1fs (attempt %s/%s)",
+                method,
+                _redact_sensitive_text(url),
+                wait_seconds,
+                attempt + 1,
+                attempts,
+            )
+            time.sleep(wait_seconds)
+
+        if last_response is not None:
+            last_response.raise_for_status()
+        raise requests.exceptions.RequestException("No response received from RepairDesk API")
 
     def test_connection(self):
         """Test API connectivity. Returns (success: bool, message: str)."""

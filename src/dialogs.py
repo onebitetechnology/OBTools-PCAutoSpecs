@@ -1252,23 +1252,6 @@ class KeyboardTestDialog(QDialog):
 
     @staticmethod
     def _modifier_token_from_native_codes(key, scancode, virtual_key):
-        scan_code_map = {
-            29: 'LCtrl',
-            285: 'RCtrl',
-            3613: 'RCtrl',
-            56: 'LAlt',
-            312: 'RAlt',
-            3640: 'RAlt',
-            42: 'LShift',
-            54: 'RShift',
-            347: 'LWin',
-            3675: 'LWin',
-            348: 'RWin',
-            3676: 'RWin',
-        }
-        if scancode in scan_code_map:
-            return scan_code_map[scancode]
-
         if virtual_key == 0xA3:
             return 'RCtrl'
         if virtual_key == 0xA2:
@@ -1289,6 +1272,23 @@ class KeyboardTestDialog(QDialog):
             return 'RWin'
         if virtual_key == 0x5B:
             return 'LWin'
+
+        scan_code_map = {
+            29: 'LCtrl',
+            285: 'RCtrl',
+            3613: 'RCtrl',
+            56: 'LAlt',
+            312: 'RAlt',
+            3640: 'RAlt',
+            42: 'LShift',
+            54: 'RShift',
+            347: 'LWin',
+            3675: 'LWin',
+            348: 'RWin',
+            3676: 'RWin',
+        }
+        if scancode in scan_code_map:
+            return scan_code_map[scancode]
 
         if key == Qt.Key_Control:
             return 'RCtrl' if scancode in (285, 3613) else 'LCtrl'
