@@ -767,6 +767,52 @@ def _collect_cpu_temp_info() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _collect_cpu_temp_stable_info(
+        samples: int = 5,
+        delay_sec: float = 0.75) -> Optional[Dict[str, Any]]:
+    """Collect several CPU temperature samples and return a median reading."""
+    readings = []
+    reading_infos = []
+    for index in range(max(1, samples)):
+        info = _collect_cpu_temp_info()
+        temp = info.get('temp_c') if info else None
+        if temp is not None:
+            temp_value = float(temp)
+            readings.append(temp_value)
+            reading_infos.append((temp_value, info))
+        if index < samples - 1:
+            time.sleep(delay_sec)
+
+    if not readings:
+        return None
+
+    sorted_readings = sorted(readings)
+    median_temp = sorted_readings[len(sorted_readings) // 2]
+    sample_text = ", ".join(f"{value:.1f}" for value in readings)
+    if len(readings) >= 3 and (max(readings) - min(readings)) >= 8:
+        logging.debug(
+            "CPU idle temp samples varied widely; using median %.1f°C from %s",
+            median_temp,
+            sample_text,
+        )
+    else:
+        logging.debug(
+            "CPU idle temp stable sample: %.1f°C from %s",
+            median_temp,
+            sample_text,
+        )
+
+    _, closest_info = min(
+        reading_infos,
+        key=lambda item: abs(item[0] - median_temp),
+    )
+    result = dict(closest_info or {})
+    result['temp_c'] = round(median_temp, 1)
+    result['samples'] = [round(value, 1) for value in readings]
+    result['source'] = result.get('source') or 'Stable sample'
+    return result
+
+
 def _collect_cpu_temp_lhm() -> Optional[float]:
     """Backward-compatible float-only CPU temp helper."""
     temp_info = _collect_cpu_temp_info()
@@ -888,7 +934,7 @@ def collect_temperatures() -> Dict[str, Any]:
         import time
         time.sleep(5)
 
-        cpu_temp_info = _collect_cpu_temp_info()
+        cpu_temp_info = _collect_cpu_temp_stable_info()
         cpu_temp = cpu_temp_info.get('temp_c') if cpu_temp_info else None
 
         # Try NVIDIA GPU first
@@ -910,6 +956,7 @@ def collect_temperatures() -> Dict[str, Any]:
             "cpu_temp_c": round(cpu_temp, 1) if cpu_temp else None,
             "cpu_sensor": cpu_temp_info.get('sensor') if cpu_temp_info else None,
             "cpu_sensor_source": cpu_temp_info.get('source') if cpu_temp_info else None,
+            "cpu_temp_samples": cpu_temp_info.get('samples') if cpu_temp_info else None,
             "gpu": gpu_data
         }
 
@@ -2248,6 +2295,30 @@ def collect_advanced_health_summary(
         except Exception as e:
             logging.warning(f"CPU load temp failed: {e}")
             results['cpu_load_temp'] = {"status": "unavailable", "reason": str(e)}
+
+        temps_result = results.get('temperatures')
+        load_result = results.get('cpu_load_temp')
+        if (
+            isinstance(temps_result, dict)
+            and isinstance(load_result, dict)
+            and temps_result.get('status') == 'ok'
+            and load_result.get('status') == 'ok'
+        ):
+            idle_temp = temps_result.get('cpu_temp_c')
+            load_peak = load_result.get('peak_temp_c')
+            if (
+                isinstance(idle_temp, (int, float))
+                and isinstance(load_peak, (int, float))
+                and idle_temp > load_peak + 5
+            ):
+                note = (
+                    f"Ignored questionable idle CPU temp {idle_temp:.0f}°C because "
+                    f"load peak was {load_peak:.0f}°C from the same sensor path."
+                )
+                logging.warning(note)
+                temps_result['cpu_temp_questionable'] = True
+                temps_result['cpu_temp_note'] = note
+                temps_result['cpu_temp_c'] = None
 
     # Memory temp — DDR5 exposes sensors via LHM, DDR4 usually doesn't
     if 'ram' in skip:

@@ -902,6 +902,8 @@ class ReportFormatter:
             t_label = '(Hot)' if t >= 80 else '(Warm)' if t >= 60 else '(Normal)'
             sensor_suffix = f" — {sensor}" if sensor else ""
             lines.append(f"<strong>Temp — Idle:</strong> {t:.0f}°C {t_label}{sensor_suffix}")
+        elif temps.get('status') == 'ok' and temps.get('cpu_temp_questionable'):
+            lines.append("<strong>Temp — Idle:</strong> Ignored questionable sensor spike")
 
         load = advanced.get('cpu_load_temp', {})
         if load.get('status') == 'cancelled':
@@ -1127,6 +1129,8 @@ class ReportFormatter:
                 t_label = '(Hot)' if t >= 80 else '(Warm)' if t >= 60 else '(Normal)'
                 sensor_suffix = f" — {sensor}" if sensor else ""
                 lines.append(f"<strong>CPU Temp (Idle):</strong> {t:.0f}°C {t_label}{sensor_suffix}")
+            elif temps.get('status') == 'ok' and temps.get('cpu_temp_questionable'):
+                lines.append("<strong>CPU Temp (Idle):</strong> Ignored questionable sensor spike")
             load = advanced.get('cpu_load_temp', {})
             if load.get('status') == 'cancelled':
                 lines.append("<strong>CPU Temp (Load):</strong> Cancelled by tech")

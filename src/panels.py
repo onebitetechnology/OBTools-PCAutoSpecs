@@ -537,6 +537,9 @@ class SystemInfoPanel(QWidget):
                 sensor_suffix = f" — {cpu_sensor}" if cpu_sensor else ""
                 sec.add_info_row('Temp — Idle', f"{cpu_temp:.0f}\u00b0C {label}{sensor_suffix}",
                                  color=color)
+            elif temps.get('status') == 'ok' and temps.get('cpu_temp_questionable'):
+                sec.add_info_row('Temp — Idle', 'Ignored questionable sensor spike',
+                                 color=COLORS['warning'])
 
             # CPU Temperature — under load
             load_temp = advanced.get('cpu_load_temp', {})

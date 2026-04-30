@@ -156,6 +156,8 @@ Collects:
 - idle temperature when available
 - load temperature during the CPU stress test
 
+Idle CPU temperature is sampled several times, and obvious sensor spikes are ignored when they contradict the later load-temperature result.
+
 The CPU stress test is short and is only meant to observe temperature behavior under load.
 
 There is also a cancel button during the CPU stress popup.
