@@ -173,6 +173,7 @@ class MainWindow(QMainWindow):
         self._startup_update_info = None
         self._startup_update_prompt_shown = False
         self._startup_dialog_open = False
+        self._dedicated_gpu_warning_shown = False
 
         # Job context — set by StartupDialog, carried into scan + report
         self._job_tech_name     = self._settings.get('last_tech_name', '')
@@ -685,6 +686,7 @@ class MainWindow(QMainWindow):
     def _start_spec_collection(self):
         logging.info("Starting system specifications collection")
         self._scan_in_progress = True
+        self._dedicated_gpu_warning_shown = False
         self._info_panel.set_job_button_enabled(False)
         if self._gpu_worker:
             self._gpu_worker.stop()
@@ -788,6 +790,7 @@ class MainWindow(QMainWindow):
 
     def _finalize_scan_ready_state(self):
         specs = self._system_specs
+        self._show_dedicated_gpu_stress_warning_if_needed()
 
         if self._job_quick_upload and self._job_upload_scope == UPLOAD_SCOPE_OVERVIEW and self._job_ticket_id:
             QTimer.singleShot(350, self._quick_upload_system_overview)
@@ -813,6 +816,85 @@ class MainWindow(QMainWindow):
                     lambda: ScanSummaryDialog(issues, specs_with_context, parent=self).exec()
                 )
         self._maybe_prompt_for_update()
+
+    @staticmethod
+    def _dedicated_gpu_names(specs):
+        """Return likely dedicated GPUs from the collected GPU summary string."""
+        import re
+
+        cpu_text = str(specs.get('CPU') or '').strip().lower()
+        if not cpu_text or cpu_text in ('unknown', 'test skipped'):
+            return []
+
+        gpu_text = str(specs.get('GPU') or '').strip()
+        if not gpu_text or gpu_text.lower() in ('unknown', 'test skipped', 'no discrete gpu detected'):
+            return []
+
+        ignored_terms = (
+            'intel', 'microsoft basic display', 'remote display',
+            'vmware', 'virtualbox', 'parallels', 'citrix', 'displaylink',
+            'usb display', 'rdp',
+        )
+        dedicated_patterns = (
+            r'\bnvidia\b', r'\bgeforce\b', r'\brtx\b', r'\bgtx\b',
+            r'\bquadro\b', r'\btesla\b', r'\bradeon\s+rx\b',
+            r'\bradeon\s+pro\b', r'\bfirepro\b', r'\bradeon\s+hd\b',
+            r'\bradeon\s+r[579]\b',
+        )
+
+        dedicated = []
+        for raw_name in re.split(r'\s*,\s*', gpu_text):
+            name = raw_name.strip()
+            if not name:
+                continue
+            lower_name = name.lower()
+            if any(term in lower_name for term in ignored_terms):
+                continue
+            if any(re.search(pattern, lower_name, re.IGNORECASE) for pattern in dedicated_patterns):
+                display_name = re.split(r'\s+-\s+Driver:', name, maxsplit=1)[0].strip()
+                if display_name and display_name not in dedicated:
+                    dedicated.append(display_name)
+
+        return dedicated
+
+    def _show_dedicated_gpu_stress_warning_if_needed(self):
+        if self._dedicated_gpu_warning_shown:
+            return
+
+        dedicated_gpus = self._dedicated_gpu_names(self._system_specs)
+        if not dedicated_gpus:
+            return
+
+        self._dedicated_gpu_warning_shown = True
+        gpu_list = "\n".join(f"- {name}" for name in dedicated_gpus)
+        message = (
+            "Dedicated graphics card detected:\n\n"
+            f"{gpu_list}\n\n"
+            "IMPORTANT: The PC AutoSpec basic tests are not enough for final "
+            "thermal validation on systems with dedicated graphics.\n\n"
+            "The tech MUST run a separate combined stress test outside PC AutoSpec:\n"
+            "- FurMark running for GPU load\n"
+            "- AIDA64 running for CPU/system load and temperature monitoring\n\n"
+            "Watch CPU and GPU temperatures while both tools are running before "
+            "passing the unit."
+        )
+        logging.warning(
+            "Dedicated GPU detected; external FurMark + AIDA64 combined stress test required: %s",
+            ", ".join(dedicated_gpus),
+        )
+        self._log_panel.append(
+            "  Dedicated GPU detected - run FurMark + AIDA64 combined stress test before passing\n",
+            'warning',
+        )
+        box = _make_msgbox(
+            self,
+            "Dedicated GPU Stress Test Required",
+            message,
+            buttons=QMessageBox.StandardButton.Ok,
+            default=QMessageBox.StandardButton.Ok,
+        )
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.exec()
 
     def _run_keyboard_test_workflow(self):
         dlg = KeyboardTestDialog(parent=self)

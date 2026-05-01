@@ -158,6 +158,8 @@ Collects:
 
 Idle CPU temperature is sampled several times, and obvious sensor spikes are ignored when they contradict the later load-temperature result.
 
+Intel Core CPU generation is derived from the model number after the dash, so high-end mobile chips such as `i9-14900HX` are reported as 14th Gen instead of being confused with the `i9` product tier.
+
 The CPU stress test is short and is only meant to observe temperature behavior under load.
 
 There is also a cancel button during the CPU stress popup.
@@ -185,6 +187,8 @@ Collects:
 - GPU idle / load temperatures when available
 
 Temperature lines now try to show the sensor source being used.
+
+When PC AutoSpec detects a CPU and a dedicated graphics card, it shows a warning that the tech must also run a separate combined FurMark and AIDA64 stress/temperature check outside the basic PC AutoSpec tests.
 
 ### Motherboard & BIOS
 

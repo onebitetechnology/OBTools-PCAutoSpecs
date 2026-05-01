@@ -1547,8 +1547,16 @@ def _get_cpu_enhanced_details(cpu_name):
         "14600": ("14th Gen", "Raptor Lake Refresh", 2024, "LGA1700", "DDR5-5600 / DDR4-3200", 65, ["i5-14600K", "i7-14700"]),
         "14500": ("14th Gen", "Raptor Lake Refresh", 2024, "LGA1700", "DDR5-5600 / DDR4-3200", 65, ["i5-14600", "i7-14700"]),
         "14400": ("14th Gen", "Raptor Lake Refresh", 2024, "LGA1700", "DDR5-5600 / DDR4-3200", 65, ["i5-14500", "i7-14700"]),
-        
+
         # Intel Mobile CPUs (H-series, High Performance) - Common in gaming laptops
+        "14900HX": ("14th Gen", "Raptor Lake Refresh-HX", 2024, "BGA (Mobile)", "DDR5-5600 / DDR4-3200", 55, ["Upgrade laptop"]),
+        "14700HX": ("14th Gen", "Raptor Lake Refresh-HX", 2024, "BGA (Mobile)", "DDR5-5600 / DDR4-3200", 55, ["Upgrade laptop"]),
+        "14650HX": ("14th Gen", "Raptor Lake Refresh-HX", 2024, "BGA (Mobile)", "DDR5-5600 / DDR4-3200", 55, ["Upgrade laptop"]),
+        "13980HX": ("13th Gen", "Raptor Lake-HX", 2023, "BGA (Mobile)", "DDR5-5600 / DDR4-3200", 55, ["Upgrade laptop"]),
+        "13950HX": ("13th Gen", "Raptor Lake-HX", 2023, "BGA (Mobile)", "DDR5-5600 / DDR4-3200", 55, ["Upgrade laptop"]),
+        "13900HX": ("13th Gen", "Raptor Lake-HX", 2023, "BGA (Mobile)", "DDR5-5600 / DDR4-3200", 55, ["Upgrade laptop"]),
+        "13700HX": ("13th Gen", "Raptor Lake-HX", 2023, "BGA (Mobile)", "DDR5-5600 / DDR4-3200", 55, ["Upgrade laptop"]),
+        "13650HX": ("13th Gen", "Raptor Lake-HX", 2023, "BGA (Mobile)", "DDR5-5600 / DDR4-3200", 55, ["Upgrade laptop"]),
         "11800H": ("11th Gen", "Tiger Lake-H", 2021, "BGA (Mobile)", "DDR4-3200", 45, ["Upgrade laptop"]),
         "10750H": ("10th Gen", "Comet Lake-H", 2020, "BGA (Mobile)", "DDR4-2933", 45, ["Upgrade laptop"]),
         "9750H": ("9th Gen", "Coffee Lake-H", 2019, "BGA (Mobile)", "DDR4-2666", 45, ["Upgrade laptop"]),
@@ -1607,37 +1615,64 @@ def _get_cpu_enhanced_details(cpu_name):
         "7840HS": ("Zen 4", "Phoenix", 2023, "FP8 (Mobile)", "DDR5-5200", 35, ["Upgrade laptop"]),
         "7735HS": ("Zen 3+", "Rembrandt", 2023, "FP7 (Mobile)", "DDR5-4800", 35, ["Upgrade laptop"]),
     }
-    
-    # Try to match CPU model using word boundaries for precision
+
+    def _details_from_cpu_data(cpu_data):
+        # Handle both 7-value (without windows_compat) and 8-value
+        # (with windows_compat) tuples.
+        if len(cpu_data) == 8:
+            gen, arch, year, socket, ram, tdp, windows_compat, upgrades = cpu_data
+        elif len(cpu_data) == 7:
+            gen, arch, year, socket, ram, tdp, upgrades = cpu_data
+            windows_compat = "Windows 11 compatible"
+        else:
+            return None
+
+        from datetime import datetime
+        current_year = datetime.now().year
+        age_years = current_year - year
+
+        return {
+            'generation': gen,
+            'architecture': arch,
+            'year': year,
+            'age_years': age_years,
+            'socket': socket,
+            'max_ram_speed': ram,
+            'tdp': tdp,
+            'windows_compatibility': windows_compat,
+            'upgrade_path': upgrades
+        }
+
+    # Try direct Intel Core model tokens before generic substring matching.
+    # For names like "Intel Core i9-14900HX", the CPU tier is i9 but the
+    # generation is 14 from the 14900 model number.
     import re
+    intel_core_model = re.search(r'\bI[3579]\s*-\s*(\d{4,5})([A-Z0-9]*)\b', cpu_upper)
+    if intel_core_model:
+        model_num = intel_core_model.group(1)
+        suffix = intel_core_model.group(2) or ''
+        model_candidates = []
+        if suffix:
+            model_candidates.append(f"{model_num}{suffix}")
+        # Only fall back to the base model for desktop-style suffixes. A
+        # mobile i7-7700HQ should not inherit the desktop i7-7700 socket/TDP.
+        if not suffix or suffix in ('F', 'K', 'KF', 'KS', 'T'):
+            model_candidates.append(model_num)
+
+        for model in model_candidates:
+            cpu_data = CPU_DATABASE.get(model)
+            if cpu_data:
+                details = _details_from_cpu_data(cpu_data)
+                if details:
+                    return details
+
+    # Try to match CPU model using word boundaries for precision
     for model, cpu_data in CPU_DATABASE.items():
         # Use word boundaries to avoid substring matches (e.g., "6400" matching in "G6400")
         if re.search(r'\b' + re.escape(model.upper()) + r'\b', cpu_upper):
-            # Handle both 7-value (without windows_compat) and 8-value (with windows_compat) tuples
-            if len(cpu_data) == 8:
-                gen, arch, year, socket, ram, tdp, windows_compat, upgrades = cpu_data
-            elif len(cpu_data) == 7:
-                gen, arch, year, socket, ram, tdp, upgrades = cpu_data
-                windows_compat = "Windows 11 compatible"  # Default value for entries without explicit compatibility
-            else:
-                continue  # Skip malformed entries
-            
-            # Calculate age
-            from datetime import datetime
-            current_year = datetime.now().year
-            age_years = current_year - year
-            
-            return {
-                'generation': gen,
-                'architecture': arch,
-                'year': year,
-                'age_years': age_years,
-                'socket': socket,
-                'max_ram_speed': ram,
-                'tdp': tdp,
-                'windows_compatibility': windows_compat,
-                'upgrade_path': upgrades
-            }
+            details = _details_from_cpu_data(cpu_data)
+            if details:
+                return details
 
     # Fallback for unknown CPUs - basic Windows 11 compatibility detection
     logging.debug(f"CPU '{cpu_name}' not found in database, applying fallback logic")
@@ -1753,11 +1788,21 @@ def _get_cpu_enhanced_details(cpu_name):
         elif 'CORE' in cpu_upper:
             # Extract generation number - be more specific about the patterns
             # Match patterns like "i7-7700" and extract "7" as the generation
-            gen_match = re.search(r'I(\d)-\d+|(\d+)(?:TH|ST|ND|RD)\s+GEN|(\d+)TH\s+GEN', cpu_name, re.IGNORECASE)
-            if gen_match:
+            core_model_match = re.search(r'\bI[3579]\s*-\s*(\d{4,5})[A-Z0-9]*\b', cpu_name, re.IGNORECASE)
+            gen_match = re.search(r'(\d+)(?:TH|ST|ND|RD)\s+GEN|(\d+)TH\s+GEN', cpu_name, re.IGNORECASE)
+            gen_num = None
+            if core_model_match:
+                model_number = core_model_match.group(1)
+                gen_num = int(model_number[:2] if len(model_number) >= 5 else model_number[:1])
+                logging.debug(
+                    f"Intel Core model {model_number} detected as {gen_num}th gen"
+                )
+            elif gen_match:
                 # Debug which group matched
                 logging.debug(f"Core gen_match groups: {gen_match.groups()}")
-                gen_num = int(gen_match.group(1) or gen_match.group(2) or gen_match.group(3))
+                gen_num = int(gen_match.group(1) or gen_match.group(2))
+
+            if gen_num is not None:
                 if gen_num >= 8:  # 8th generation and newer
                     windows_compat = "Windows 11 compatible"
                     logging.debug(f"Intel Core {gen_num}th gen detected - {windows_compat}")
@@ -1883,8 +1928,7 @@ def _get_cpu_enhanced_details(cpu_name):
 
         # Extract generation for return statement if available
         generation = 'Unknown'
-        if 'gen_match' in locals() and gen_match:
-            gen_num = int(gen_match.group(1) or gen_match.group(2) or gen_match.group(3))
+        if 'gen_num' in locals() and gen_num is not None:
             generation = f"{gen_num}th Gen"
 
         return {

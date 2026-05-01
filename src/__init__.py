@@ -1,4 +1,4 @@
 """
 PC AutoSpec - Source Package
 """
-__version__ = "2.2.45-beta.43"
+__version__ = "2.2.45-beta.45"
