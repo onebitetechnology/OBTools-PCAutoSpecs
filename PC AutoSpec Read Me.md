@@ -160,6 +160,8 @@ Idle CPU temperature is sampled several times, and obvious sensor spikes are ign
 
 Intel Core CPU generation is derived from the model number after the dash, so high-end mobile chips such as `i9-14900HX` are reported as 14th Gen instead of being confused with the `i9` product tier.
 
+Runtime CPU usage is captured as a pre-test baseline before heavier diagnostics and CPU stress testing begin, using multiple short samples to avoid one-off spikes from the scan itself.
+
 The CPU stress test is short and is only meant to observe temperature behavior under load.
 
 There is also a cancel button during the CPU stress popup.

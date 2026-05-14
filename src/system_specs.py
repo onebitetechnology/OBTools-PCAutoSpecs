@@ -928,6 +928,12 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
         if spec_callback:
             spec_callback(specs)
 
+    # Capture runtime health before WMI inventory and stress diagnostics can
+    # affect the CPU reading shown in the final report.
+    log_message("Capturing baseline runtime health...")
+    specs['SystemHealth'] = _get_system_health()
+    _emit_specs()
+
     # Initialize COM/WMI connection (direct WMI access from Python - no subprocess overhead)
     com_wmi = None
     
@@ -959,7 +965,6 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
     # System Identification - Type, Model, Serial (populates System Overview early)
     log_message("Identifying system...")
     specs['SystemType'] = _get_system_type(com_wmi)
-    specs['SystemHealth'] = _get_system_health()
     specs['LaptopModel'] = _get_laptop_model(com_wmi)
     specs['DesktopType'] = _get_desktop_type(com_wmi, specs.get('SystemType', ''))
     specs['SerialNumber'] = _get_serial_number(com_wmi)
@@ -4170,8 +4175,32 @@ def _get_display_info(com_wmi):
         return "Display information unavailable"
 
 
+def _sample_baseline_cpu_percent(samples=5, interval=0.5):
+    """Return a conservative CPU baseline that avoids one-off scan spikes."""
+    readings = []
+    try:
+        psutil.cpu_percent(interval=None)  # prime psutil's rolling counter
+        for _ in range(samples):
+            readings.append(float(psutil.cpu_percent(interval=interval)))
+    except Exception as e:
+        logging.debug(f"CPU baseline sampling failed: {e}")
+
+    if not readings:
+        return None
+
+    # For an "idle/baseline" value, the lowest short sample is more useful
+    # than a transient spike caused by PC AutoSpec starting WMI/LHM work.
+    baseline = min(readings)
+    logging.debug(
+        "CPU baseline samples: %s; using %.1f%%",
+        ", ".join(f"{value:.1f}" for value in readings),
+        baseline,
+    )
+    return baseline
+
+
 def _get_system_health():
-    """Get system health information"""
+    """Get baseline system health before diagnostics/stress tests run."""
     health_info = []
     
     try:
@@ -4181,9 +4210,13 @@ def _get_system_health():
         uptime_str = str(uptime).split('.')[0]  # Remove microseconds
         health_info.append(f"Uptime: {uptime_str}")
         
-        # CPU usage
-        cpu_percent = psutil.cpu_percent(interval=1)
-        health_info.append(f"CPU Usage: {cpu_percent:.1f}%")
+        # CPU usage baseline. This is collected before the CPU stress test and
+        # uses several samples so the report does not blame our own diagnostics.
+        cpu_percent = _sample_baseline_cpu_percent()
+        if cpu_percent is not None:
+            health_info.append(f"CPU Usage: {cpu_percent:.1f}% (pre-test baseline)")
+        else:
+            health_info.append("CPU Usage: unavailable")
         
         # Memory usage (already in RAM info, but include here for completeness)
         mem = psutil.virtual_memory()

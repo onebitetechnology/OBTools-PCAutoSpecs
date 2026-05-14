@@ -576,7 +576,7 @@ class ReportFormatter:
         if system_health:
             cpu_match = re.search(r'CPU Usage[:\s]+([\d.]+)%', system_health, re.IGNORECASE)
             if 'cpu' not in skip_cats and cpu_match and float(cpu_match.group(1)) > 25:
-                issues.append(f"CPU Usage: HIGH ({float(cpu_match.group(1)):.0f}% at idle)")
+                issues.append(f"CPU Usage: HIGH ({float(cpu_match.group(1)):.0f}% pre-test baseline)")
             ram_match = re.search(r'Memory Usage[:\s]+([\d.]+)%', system_health, re.IGNORECASE)
             if 'ram' not in skip_cats and ram_match and float(ram_match.group(1)) > 85:
                 issues.append(f"RAM Usage: HIGH ({float(ram_match.group(1)):.0f}%)")
@@ -790,7 +790,7 @@ class ReportFormatter:
             if cpu_match:
                 cpu_usage = float(cpu_match.group(1))
                 if 'cpu' not in skip_cats and cpu_usage > 25:
-                    issues.append(f"CPU Usage: HIGH ({cpu_usage}% at idle - investigate malware)")
+                    issues.append(f"CPU Usage: HIGH ({cpu_usage}% pre-test baseline - investigate background load)")
 
             # Check for high RAM usage
             ram_match = re.search(r'Memory Usage[:\s]+([\d.]+)%', system_health, re.IGNORECASE)
