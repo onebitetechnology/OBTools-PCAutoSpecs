@@ -2,6 +2,15 @@
 
 ---
 
+## v2.2.45-beta.47 — 2026-05-25
+
+### Job Setup display fit shortcut
+- Job Setup now has a native maximize control and treats title-bar maximize/double-click as "fit to this display" instead of leaving the popup oversized on scaled or short-resolution screens.
+- Double-clicking the black Job Setup header also resizes and moves the popup inside the current monitor's available work area, with the scrollable body preserving access to the full form.
+- Lowered the Job Setup minimum size so the fit action can actually shrink on smaller displays.
+
+---
+
 ## v2.2.5 — 2026-03-13
 
 ### BIOS version + date now in report

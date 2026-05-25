@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from urllib.parse import quote
 
-from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QDateTime
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QDateTime, QEvent
 from PySide6.QtGui import QPalette, QColor, QDesktopServices
 
 from PySide6.QtWidgets import (
@@ -40,6 +40,19 @@ from updater import get_pending_update, launch_pending_update
 from workers import UpdateCheckWorker, UpdateDownloadWorker
 
 README_FILENAME = "PC AutoSpec Read Me.md"
+
+
+class FitToDisplayHeader(QWidget):
+    """Header bar that asks its parent dialog to fit the active display."""
+
+    double_clicked = Signal()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 
@@ -273,11 +286,13 @@ class StartupDialog(QDialog):
 
     REPORT_TYPE_INITIAL = "Initial Device Report"
     REPORT_TYPE_FINAL   = "Final Device Report (Post Repair)"
+    MIN_FIT_WIDTH = 640
+    MIN_FIT_HEIGHT = 480
 
     def __init__(self, parent=None, prefill_tech_name=""):
         super().__init__(parent)
         self.setWindowTitle("Job Setup")
-        self.setMinimumSize(860, 700)
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
 
         # Result attributes (populated on accept or left as defaults on skip)
         self.tech_name       = ""
@@ -298,15 +313,20 @@ class StartupDialog(QDialog):
         screen = self.screen() or QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
+            self.setMinimumSize(
+                min(self.MIN_FIT_WIDTH, available.width()),
+                min(self.MIN_FIT_HEIGHT, available.height()),
+            )
             self.resize(
-                min(1320, max(860, available.width() - 80)),
-                min(1040, max(700, available.height() - 90)),
+                min(1320, max(860, available.width() - 80), available.width()),
+                min(1040, max(700, available.height() - 90), available.height()),
             )
             self.setMaximumSize(
-                max(860, available.width() - 40),
-                max(700, available.height() - 40),
+                max(self.MIN_FIT_WIDTH, available.width()),
+                max(self.MIN_FIT_HEIGHT, available.height()),
             )
         else:
+            self.setMinimumSize(self.MIN_FIT_WIDTH, self.MIN_FIT_HEIGHT)
             self.resize(1120, 900)
 
         outer = QVBoxLayout(self)
@@ -314,9 +334,10 @@ class StartupDialog(QDialog):
         outer.setSpacing(0)
 
         # ── Header ────────────────────────────────────────────────
-        header = QWidget()
+        header = FitToDisplayHeader()
         header.setFixedHeight(54)
         header.setStyleSheet(f"background-color: {COLORS['header_bg']};")
+        header.double_clicked.connect(self._fit_to_display)
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(20, 0, 20, 0)
         title_lbl = QLabel("Job Setup")
@@ -669,6 +690,64 @@ class StartupDialog(QDialog):
         footer.raise_()
         self._apply_job_setup_button_styles()
         self._refresh_start_button()
+
+    def _available_geometry_for_current_display(self):
+        """Return the work area for the screen the dialog is currently on."""
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            screen = self.screen()
+        if screen is None and self.parentWidget() is not None:
+            screen = self.parentWidget().screen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        return screen.availableGeometry() if screen else None
+
+    def _fit_rect_for_current_display(self, margin=8):
+        available = self._available_geometry_for_current_display()
+        if available is None:
+            return None
+
+        # QWidget geometry is the client area; frameGeometry includes the
+        # native Windows title bar/borders. Account for those so the whole
+        # popup, not just its contents, stays inside the work area.
+        frame = self.frameGeometry()
+        client = self.geometry()
+        left = max(0, client.x() - frame.x())
+        top = max(0, client.y() - frame.y())
+        right = max(0, frame.right() - client.right())
+        bottom = max(0, frame.bottom() - client.bottom())
+
+        rect = available.adjusted(
+            margin + left,
+            margin + top,
+            -(margin + right),
+            -(margin + bottom),
+        )
+        if rect.width() <= 0 or rect.height() <= 0:
+            return available
+        return rect
+
+    def _fit_to_display(self):
+        """Resize and move the job setup popup so it fits the active display."""
+        rect = self._fit_rect_for_current_display()
+        if rect is None:
+            return
+
+        if self.windowState() & Qt.WindowState.WindowMaximized:
+            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMaximized)
+
+        self.setMinimumSize(
+            min(self.MIN_FIT_WIDTH, rect.width()),
+            min(self.MIN_FIT_HEIGHT, rect.height()),
+        )
+        self.setMaximumSize(max(1, rect.width()), max(1, rect.height()))
+        self.setGeometry(rect)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            if self.windowState() & Qt.WindowState.WindowMaximized:
+                QTimer.singleShot(0, self._fit_to_display)
 
     # ── Ticket handling ───────────────────────────────────────────
 
