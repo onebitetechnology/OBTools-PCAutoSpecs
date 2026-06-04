@@ -2,6 +2,15 @@
 
 ---
 
+## v2.2.45-beta.48 — 2026-06-04
+
+### SSD slow-speed critical issue
+- Known SSD/NVMe boot-drive speed tests now appear in Critical Issues when the C: benchmark falls into HDD/Slow territory.
+- The critical line includes the matched drive model/type plus read/write speeds, so an NVMe such as `KBG30ZMS256G` at ~154 MB/s read / 134 MB/s write is clearly called out for controller/drive-health investigation or replacement.
+- RepairDesk upload notes and the post-scan critical popup now use the same drive-speed issue rule.
+
+---
+
 ## v2.2.45-beta.47 — 2026-05-25
 
 ### Job Setup display fit shortcut

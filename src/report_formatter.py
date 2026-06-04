@@ -458,6 +458,86 @@ class ReportFormatter:
                 return self._classify_drive_type(drive)
         return None
 
+    def _find_drive_for_disk_speed(self, specs):
+        """Best-effort match for the physical drive backing the C: benchmark."""
+        storage_health = [
+            drive for drive in (specs.get('StorageHealth', []) or [])
+            if drive.get('status') != 'N/A'
+            and 'USB' not in str(drive.get('model', '')).upper()
+            and self._classify_drive_type(drive) != 'USB'
+        ]
+        if not storage_health:
+            return None
+
+        storage_text = specs.get('Storage', '') or ''
+        c_line = ''
+        for line in storage_text.splitlines():
+            if re.match(r'Drive\s+C:', line.strip(), re.IGNORECASE):
+                c_line = line.strip()
+                break
+
+        if c_line:
+            c_upper = c_line.upper()
+            for drive in storage_health:
+                model = str(drive.get('model') or '').strip().upper()
+                if model and model in c_upper:
+                    return drive
+
+            c_type = self._classify_drive_type_from_line(c_line)
+            if c_type:
+                for drive in storage_health:
+                    if self._classify_drive_type(drive) == c_type:
+                        return drive
+
+        if len(storage_health) == 1:
+            return storage_health[0]
+
+        return None
+
+    def _build_drive_speed_issue(self, specs):
+        """Return a critical/warning line for abnormal C: drive speed."""
+        advanced = specs.get('AdvancedHealth', {})
+        disk_speed = advanced.get('disk_speed', {})
+        if disk_speed.get('status') != 'ok':
+            return None
+
+        read_mb = disk_speed.get('display_read_mb_s', disk_speed.get('read_mb_s', 0))
+        write_mb = disk_speed.get('display_write_mb_s', disk_speed.get('write_mb_s', 0))
+        try:
+            read_mb = float(read_mb)
+            write_mb = float(write_mb)
+        except (TypeError, ValueError):
+            return None
+
+        drive = self._find_drive_for_disk_speed(specs)
+        drive_type = self._classify_drive_type(drive) if drive else None
+        drive_model = str(drive.get('model') or '').strip() if drive else ''
+        drive_upper = f"{drive_type or ''} {drive_model}".upper()
+        is_ssd = 'SSD' in drive_upper or 'NVME' in drive_upper
+
+        speed_text = f"Read {read_mb:.0f} MB/s, Write {write_mb:.0f} MB/s"
+        if disk_speed.get('cached_read_likely'):
+            speed_text += ", cached read corrected"
+
+        if is_ssd and (read_mb < 400 or write_mb < 150):
+            drive_label = drive_type or 'SSD'
+            if drive_model:
+                drive_label = f"{drive_model} ({drive_label})"
+            return (
+                f"Drive Speed: CRITICAL - {drive_label} is performing at HDD/Slow speeds "
+                f"({speed_text}) - investigate drive/controller health or replace the SSD"
+            )
+
+        if read_mb < 80 or write_mb < 50:
+            return (
+                f"Drive Speed: VERY SLOW ({speed_text} - possible drive failure or HDD)"
+            )
+        if read_mb < 200 or write_mb < 100:
+            return (
+                f"Drive Speed: SLOW ({speed_text} - consider SSD upgrade)"
+            )
+        return None
+
     @staticmethod
     def _line_already_has_drive_type(line):
         upper = (line or '').upper()
@@ -629,18 +709,10 @@ class ReportFormatter:
                     issues.append(f"Partition Style: {model} is RAW (unformatted or unrecognized)")
 
         # Drive speed
-        disk_speed = advanced.get('disk_speed', {})
-        if 'storage' not in skip_cats and disk_speed.get('status') == 'ok':
-            read_mb = disk_speed.get('display_read_mb_s', disk_speed.get('read_mb_s', 0))
-            write_mb = disk_speed.get('display_write_mb_s', disk_speed.get('write_mb_s', 0))
-            if read_mb < 80 or write_mb < 50:
-                issues.append(
-                    f"Drive Speed: VERY SLOW (Read {read_mb:.0f} MB/s, Write {write_mb:.0f} MB/s"
-                    " \u2014 possible drive failure or HDD)")
-            elif read_mb < 200 or write_mb < 100:
-                issues.append(
-                    f"Drive Speed: SLOW (Read {read_mb:.0f} MB/s, Write {write_mb:.0f} MB/s"
-                    " \u2014 consider SSD upgrade)")
+        if 'storage' not in skip_cats:
+            drive_speed_issue = self._build_drive_speed_issue(specs)
+            if drive_speed_issue:
+                issues.append(drive_speed_issue)
 
         # Extended HDD self-test
         if 'storage' not in skip_cats:
@@ -839,6 +911,10 @@ class ReportFormatter:
                         f"Extended HDD Test: {drive.get('model', 'Unknown Drive')} — "
                         f"{result.get('summary', 'Failed')}"
                     )
+
+            drive_speed_issue = self._build_drive_speed_issue(specs)
+            if drive_speed_issue:
+                issues.append(drive_speed_issue)
 
         keyboard = advanced.get('keyboard_test', {})
         if 'keyboard' not in skip_cats and keyboard:
