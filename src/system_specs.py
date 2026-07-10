@@ -2565,6 +2565,20 @@ def _get_ram_details(com_wmi):
         return None
 
 
+def _gpu_display_priority(gpu_info):
+    """Sort dedicated GPUs before integrated adapters in display/report text."""
+    lower = (gpu_info or '').lower()
+    if any(term in lower for term in ('nvidia', 'geforce', 'rtx', 'gtx', 'quadro', 'tesla')):
+        return 0
+    if any(term in lower for term in ('radeon rx', 'radeon pro', 'firepro', 'intel arc')):
+        return 1
+    if 'intel' in lower or re.search(r'\bradeon\s+(?:610m|660m|680m|740m|760m|780m|880m|890m)\b', lower):
+        return 3
+    if 'microsoft basic' in lower or 'remote display' in lower or 'virtual' in lower:
+        return 4
+    return 2
+
+
 def _get_gpu_info(com_wmi):
     """Get enhanced GPU information with VRAM and driver details using COM/WMI"""
     gpu_list = []
@@ -2750,6 +2764,7 @@ def _get_gpu_info(com_wmi):
                 logging.debug(f"Failed to get GPU info via COM/WMI: {e}")
         
         if gpu_list:
+            gpu_list.sort(key=_gpu_display_priority)
             return ", ".join(gpu_list)
         return "Unknown"
     except Exception as e:

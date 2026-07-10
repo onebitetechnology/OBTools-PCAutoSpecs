@@ -2,6 +2,16 @@
 
 ---
 
+## v2.2.45-beta.49 — 2026-07-10
+
+### Hybrid NVIDIA laptop GPU detection
+- Fixed advanced GPU detection silently skipping `nvidia-smi` because of a swallowed `sys.platform` reference error.
+- NVIDIA idle temperature now uses `nvidia-smi` in packaged builds, so `pynvml` is no longer required just to read GPU temperature.
+- Dedicated GPUs are preferred ahead of integrated adapters in GPU display/report order and stress-test detection.
+- Cleaned related advanced-health log exceptions for Event Viewer, Windows Update, and webcam fallback collection.
+
+---
+
 ## v2.2.45-beta.48 — 2026-06-04
 
 ### SSD slow-speed critical issue

@@ -192,6 +192,8 @@ Temperature lines now try to show the sensor source being used.
 
 When PC AutoSpec detects a CPU and a dedicated graphics card, it shows a warning that the tech must also run a separate combined FurMark and AIDA64 stress/temperature check outside the basic PC AutoSpec tests.
 
+On hybrid laptops with both integrated graphics and a dedicated NVIDIA GPU, PC AutoSpec prefers the dedicated GPU for display order, idle temperature, and stress-test detection.
+
 ### Motherboard & BIOS
 
 Collects:

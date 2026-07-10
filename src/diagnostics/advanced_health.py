@@ -16,6 +16,7 @@ import subprocess
 import json
 import logging
 import os
+import re
 import time
 import tempfile
 from datetime import datetime, timedelta
@@ -272,13 +273,6 @@ def collect_event_viewer_summary(days: int = 7) -> Dict[str, Any]:
                 "message": latest_critical.get("message", "")[:200],
             }
 
-        driver_titles = (available_updates or {}).get("DriverTitles", []) or []
-        optional_titles = (available_updates or {}).get("OptionalTitles", []) or []
-        if isinstance(driver_titles, str):
-            driver_titles = [driver_titles]
-        if isinstance(optional_titles, str):
-            optional_titles = [optional_titles]
-
         return {
             "status": "ok",
             "days_lookback": days,
@@ -414,6 +408,12 @@ def collect_windows_update_health() -> Dict[str, Any]:
         """
 
         available_updates = _run_powershell_json(ps_available_updates, timeout=35)
+        driver_titles = (available_updates or {}).get("DriverTitles", []) or []
+        optional_titles = (available_updates or {}).get("OptionalTitles", []) or []
+        if isinstance(driver_titles, str):
+            driver_titles = [driver_titles]
+        if isinstance(optional_titles, str):
+            optional_titles = [optional_titles]
 
         return {
             "status": "ok",
@@ -561,6 +561,87 @@ def _collect_gpu_temp_nvml() -> Optional[Dict[str, Any]]:
     except Exception as e:
         logging.debug(f"NVML GPU temp unavailable: {e}")
         return None
+
+
+def _run_nvidia_smi_query(query: str, timeout: int = 3) -> Optional[List[str]]:
+    """Run an nvidia-smi CSV query and return non-empty output lines."""
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', f'--query-gpu={query}', '--format=csv,noheader,nounits'],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW if _sys.platform == 'win32' else 0,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if result.stderr.strip():
+            logging.debug(f"nvidia-smi query failed: {result.stderr.strip()}")
+    except Exception as e:
+        logging.debug(f"nvidia-smi query unavailable: {e}")
+    return None
+
+
+def _query_nvidia_gpu_name() -> Optional[str]:
+    """Return the first NVIDIA GPU name reported by nvidia-smi."""
+    lines = _run_nvidia_smi_query('name', timeout=5)
+    if not lines:
+        return None
+    name = lines[0].strip()
+    return name or None
+
+
+def _collect_gpu_temp_nvidia_smi() -> Optional[Dict[str, Any]]:
+    """Get NVIDIA GPU temperature via nvidia-smi without requiring pynvml."""
+    lines = _run_nvidia_smi_query('name,temperature.gpu', timeout=3)
+    if not lines:
+        return None
+
+    for line in lines:
+        parts = [part.strip() for part in line.split(',')]
+        if len(parts) < 2:
+            continue
+        name, temp_text = parts[0], parts[1]
+        try:
+            temp = float(temp_text)
+        except (TypeError, ValueError):
+            continue
+        if 20 <= temp <= 120:
+            return {
+                "name": name or "NVIDIA GPU",
+                "temp_c": round(temp, 1),
+                "sensor": "GPU Core (nvidia-smi)",
+                "source": "nvidia-smi",
+            }
+    return None
+
+
+def _is_integrated_gpu_name(name: str) -> bool:
+    """Best-effort filter for integrated/virtual display adapters."""
+    lower = (name or '').lower()
+    if not lower:
+        return True
+    if any(term in lower for term in ('microsoft basic', 'remote display', 'virtual', 'vmware', 'virtualbox', 'parallels')):
+        return True
+    if 'intel' in lower and 'arc' not in lower:
+        return True
+    # Common AMD iGPU names used in Ryzen APUs.
+    if re.search(r'\bradeon\s+(?:610m|660m|680m|740m|760m|780m|880m|890m)\b', lower):
+        return True
+    if 'radeon graphics' in lower and not any(term in lower for term in ('rx', 'pro', 'firepro')):
+        return True
+    return False
+
+
+def _is_dedicated_gpu_name(name: str) -> bool:
+    """Best-effort detector for dedicated GPUs."""
+    lower = (name or '').lower()
+    if _is_integrated_gpu_name(lower):
+        return False
+    return any(term in lower for term in (
+        'nvidia', 'geforce', 'rtx', 'gtx', 'quadro', 'tesla',
+        'radeon rx', 'radeon pro', 'firepro', 'intel arc',
+    ))
 
 
 def _collect_gpu_temp_amd() -> Optional[Dict[str, Any]]:
@@ -937,10 +1018,15 @@ def collect_temperatures() -> Dict[str, Any]:
         cpu_temp_info = _collect_cpu_temp_stable_info()
         cpu_temp = cpu_temp_info.get('temp_c') if cpu_temp_info else None
 
-        # Try NVIDIA GPU first
-        gpu_data = _collect_gpu_temp_nvml()
+        # Try NVIDIA via nvidia-smi first. Packaged builds do not auto-install
+        # pynvml, but nvidia-smi is present with normal NVIDIA drivers.
+        gpu_data = _collect_gpu_temp_nvidia_smi()
 
-        # If NVIDIA failed, try AMD GPU
+        # Fall back through the other sensor paths.
+        if gpu_data is None:
+            gpu_data = _collect_gpu_temp_nvml()
+        if gpu_data is None:
+            gpu_data = _collect_gpu_temp_lhm()
         if gpu_data is None:
             logging.debug("NVIDIA GPU temp unavailable, trying AMD...")
             gpu_data = _collect_gpu_temp_amd()
@@ -1131,7 +1217,7 @@ def collect_gpu_temp_under_load(
                     A_buf, B_buf, C_buf, np.int32(N))
             queue.finish()
 
-            temp_data = _collect_gpu_temp_lhm()
+            temp_data = _collect_gpu_temp_lhm() or _collect_gpu_temp_nvidia_smi()
             temp = temp_data['temp_c'] if temp_data else None
             if temp:
                 last_sensor = temp_data.get('sensor') or last_sensor
@@ -1160,7 +1246,7 @@ def collect_gpu_temp_under_load(
             queue.finish()
             time.sleep(1)
 
-            temp_data = _collect_gpu_temp_lhm()
+            temp_data = _collect_gpu_temp_lhm() or _collect_gpu_temp_nvidia_smi()
             temp = temp_data['temp_c'] if temp_data else None
             if temp:
                 last_sensor = temp_data.get('sensor') or last_sensor
@@ -2111,8 +2197,8 @@ def collect_webcam_info() -> Dict[str, Any]:
             return {
                 "status": "unavailable",
                 "reason": "opencv not available in packaged build",
-                "camera_count": len(cameras),
-                "cameras": cameras,
+                "camera_count": len(results['cameras']),
+                "cameras": results['cameras'],
             }
         # Try to auto-install opencv-python-headless (small, no GUI deps)
         try:
@@ -2352,34 +2438,33 @@ def collect_advanced_health_summary(
 
             # Method 1: nvidia-smi (NVIDIA)
             try:
-                import subprocess
-                smi = subprocess.run(
-                    ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
-                    capture_output=True, text=True, timeout=5,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                )
-                if smi.returncode == 0:
-                    name = smi.stdout.strip().splitlines()[0].strip()
-                    if name:
-                        gpu_name = name
-            except Exception:
-                pass
+                gpu_name = _query_nvidia_gpu_name()
+            except Exception as e:
+                logging.debug(f"nvidia-smi dedicated GPU query failed: {e}")
 
             # Method 2: WMI fallback (catches AMD / any GPU missed by nvidia-smi)
             if gpu_name is None:
                 try:
                     import wmi
                     c = wmi.WMI()
+                    dedicated_candidates = []
+                    fallback_candidates = []
                     for gpu in c.Win32_VideoController():
                         name = (gpu.Name or '').strip()
-                        desc = (gpu.Description or '').lower()
-                        # Skip integrated Intel/AMD graphics
-                        if name and not any(x in desc for x in ('microsoft', 'basic', 'virtual', 'remote')):
-                            if 'intel' not in desc or 'arc' in desc:
-                                gpu_name = name
-                                break
-                except Exception:
-                    pass
+                        desc = (gpu.Description or name or '').strip()
+                        combined = f"{name} {desc}".strip()
+                        if not name or _is_integrated_gpu_name(combined):
+                            continue
+                        if _is_dedicated_gpu_name(combined):
+                            dedicated_candidates.append(name)
+                        else:
+                            fallback_candidates.append(name)
+                    if dedicated_candidates:
+                        gpu_name = dedicated_candidates[0]
+                    elif fallback_candidates:
+                        gpu_name = fallback_candidates[0]
+                except Exception as e:
+                    logging.debug(f"WMI dedicated GPU query failed: {e}")
 
             if gpu_name:
                 _log(f"  Dedicated GPU detected ({gpu_name}) — running stress test...\n")
