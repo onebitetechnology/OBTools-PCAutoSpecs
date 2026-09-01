@@ -44,6 +44,7 @@ from settings import (
     get_app_dir, get_assets_dir, get_window_title, get_lhm_path,
     get_active_api_key, DEFAULT_UPLOAD_SCOPE, UPLOAD_SCOPE_OVERVIEW, UPLOAD_SCOPE_FULL,
 )
+from log_safety import install_credential_filter
 from repairdesk_api import RepairDeskAPI
 from report_formatter import ReportFormatter
 from panels import SystemInfoPanel, ActivityLogPanel
@@ -101,6 +102,8 @@ def setup_logging():
     ch = logging.StreamHandler(sys.stderr)
     ch.setLevel(logging.INFO)
     ch.setFormatter(console)
+
+    install_credential_filter(fh, ch)
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
