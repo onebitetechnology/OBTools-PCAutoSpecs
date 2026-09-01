@@ -12,7 +12,13 @@ $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $Pip = Join-Path $ProjectRoot ".venv\Scripts\pip.exe"
 
 & $Python -m pip install --upgrade pip
-& $Pip install -r requirements.txt pyinstaller
+& $Pip install -r requirements-dev.txt pyinstaller
+
+Write-Host "Running test suite..."
+& $Python -m pytest -q
+if ($LASTEXITCODE -ne 0) {
+    throw "Test suite failed; release build stopped before packaging."
+}
 
 Write-Host "Building PyInstaller bundle..."
 & $Python -m PyInstaller --clean PCAutoSpec.spec

@@ -27,10 +27,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          pip install -r requirements-dev.txt pyinstaller
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
+
+      - name: Run test suite
+        run: python -m pytest -q
 
       - name: Build PyInstaller bundle
         run: pyinstaller --clean PCAutoSpec.spec
