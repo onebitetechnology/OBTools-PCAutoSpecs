@@ -12,22 +12,8 @@ import time
 import requests
 
 from config import get_api_base_url, get_api_key, get_auth_mode, get_tickets_per_page
+from log_safety import redact_sensitive_text as _redact_sensitive_text
 from oauth_repairdesk import ensure_valid_access_token
-
-
-def _redact_sensitive_text(value):
-    text = str(value or "")
-    patterns = [
-        (r'([?&]api_key=)[^&\s]+', r'\1[REDACTED]'),
-        (r'(Authorization[\'"]?\s*[:=]\s*[\'"]?Bearer\s+)[A-Za-z0-9._\-~+/=]+', r'\1[REDACTED]'),
-        (r'([?&]client_secret=)[^&\s]+', r'\1[REDACTED]'),
-        (r'([?&]refresh_token=)[^&\s]+', r'\1[REDACTED]'),
-        (r'([?&]access_token=)[^&\s]+', r'\1[REDACTED]'),
-    ]
-    import re
-    for pattern, replacement in patterns:
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-    return text
 
 
 class RepairDeskAPI:

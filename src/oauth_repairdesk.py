@@ -15,21 +15,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
+from log_safety import redact_sensitive_text as _redact_sensitive_text
 from settings import load_settings, save_settings
-
-
-def _redact_sensitive_text(value):
-    text = str(value or "")
-    import re
-    patterns = [
-        (r'([?&]client_secret=)[^&\s]+', r'\1[REDACTED]'),
-        (r'([?&]refresh_token=)[^&\s]+', r'\1[REDACTED]'),
-        (r'([?&]access_token=)[^&\s]+', r'\1[REDACTED]'),
-        (r'([?&]code=)[^&\s]+', r'\1[REDACTED]'),
-    ]
-    for pattern, replacement in patterns:
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-    return text
 
 
 def _utcnow() -> datetime:
