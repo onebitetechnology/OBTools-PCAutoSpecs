@@ -2,6 +2,23 @@
 
 ---
 
+## v2.2.45-beta.50 — 2026-08-31
+
+### Credential-safe logs
+- Centralized RepairDesk API-key, bearer-token, OAuth-code, client-secret, access-token, and refresh-token redaction.
+- Added handler-boundary filtering so formatted messages, arguments, cached exception text, and complete chained tracebacks are scrubbed before reaching file or console logs.
+
+### RepairDesk upload observability
+- Every upload attempt now records one terminal `success`, `cancelled`, or `failed` event with ticket ID, request-attempt count, and final HTTP status when available.
+- Terminal events exclude customer, device, note, and credential details; user-visible upload errors are sanitized as well.
+
+### Automated release gate
+- Added sanitized pytest fixtures and regression coverage for credential redaction, request retries/outcomes, and upload lifecycle events.
+- Local and hosted Windows release scripts now run pytest before PyInstaller or Inno Setup packaging begins.
+- Diagnostic collection and hardware interpretation are intentionally unchanged in this foundation beta.
+
+---
+
 ## v2.2.45-beta.49 — 2026-07-10
 
 ### Hybrid NVIDIA laptop GPU detection
