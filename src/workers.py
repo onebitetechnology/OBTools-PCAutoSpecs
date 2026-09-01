@@ -5,7 +5,24 @@ Handles system spec collection, upload, and GPU monitoring.
 
 import time
 import logging
+from typing import Optional
+
 from PySide6.QtCore import QThread, Signal
+
+from log_safety import redact_sensitive_text
+from repairdesk_api import RequestOutcome
+
+
+def _log_upload_terminal_event(
+        *, outcome: str, ticket_id: str, attempts: int,
+        http_status: Optional[int]) -> None:
+    logging.info(
+        "RepairDesk upload terminal outcome=%s ticket=%s attempts=%d http_status=%s",
+        outcome,
+        ticket_id,
+        attempts,
+        http_status if http_status is not None else "none",
+    )
 
 
 class SpecCollectorWorker(QThread):
@@ -103,6 +120,7 @@ class UploadWorker(QThread):
         self._confirmed = confirmed
 
     def run(self):
+        outcome = "failed"
         try:
             self.progress.emit("Resolving ticket ID...", "")
             ticket_info = self.api.get_ticket_customer(self.ticket_id)
@@ -125,6 +143,7 @@ class UploadWorker(QThread):
                     time.sleep(0.1)
 
             if not self._confirmed:
+                outcome = "cancelled"
                 self.finished.emit(False, "Upload cancelled by tech")
                 return
 
@@ -132,12 +151,29 @@ class UploadWorker(QThread):
             result = self.api.add_diagnostic_note(resolved_id, self.note_html)
 
             if result.get('success'):
+                outcome = "success"
                 self.finished.emit(True, str(resolved_id))
             else:
-                self.finished.emit(False, result.get('message', 'Unknown error'))
+                message = redact_sensitive_text(
+                    result.get('message', 'Unknown error')
+                )
+                self.finished.emit(False, message)
         except Exception as e:
-            logging.error(f"Upload failed: {e}", exc_info=True)
-            self.finished.emit(False, str(e))
+            message = redact_sensitive_text(e)
+            logging.error("Upload failed: %s", message, exc_info=True)
+            self.finished.emit(False, message)
+        finally:
+            request_outcome = getattr(
+                self.api,
+                "last_request_outcome",
+                RequestOutcome(),
+            )
+            _log_upload_terminal_event(
+                outcome=outcome,
+                ticket_id=str(self.ticket_id),
+                attempts=getattr(request_outcome, "attempts", 0),
+                http_status=getattr(request_outcome, "status_code", None),
+            )
 
 
 class GpuMonitorWorker(QThread):
