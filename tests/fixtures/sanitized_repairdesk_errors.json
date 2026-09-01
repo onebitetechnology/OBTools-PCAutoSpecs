@@ -1,0 +1,11 @@
+{
+  "api_key_url": "https://example.invalid/tickets?api_key=test-api-secret-123",
+  "authorization": "Bearer test-bearer-secret",
+  "oauth_payload": {
+    "client_secret": "test-client-secret",
+    "access_token": "test-access-token",
+    "refresh_token": "test-refresh-token",
+    "code": "test-oauth-code"
+  },
+  "nested_exception": "Request failed: https://example.invalid/tickets?api_key=test-nested-secret"
+}
