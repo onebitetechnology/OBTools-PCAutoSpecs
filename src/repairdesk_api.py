@@ -8,12 +8,20 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
+from typing import Optional
 
 import requests
 
 from config import get_api_base_url, get_api_key, get_auth_mode, get_tickets_per_page
 from log_safety import redact_sensitive_text as _redact_sensitive_text
 from oauth_repairdesk import ensure_valid_access_token
+
+
+@dataclass(frozen=True)
+class RequestOutcome:
+    attempts: int = 0
+    status_code: Optional[int] = None
 
 
 class RepairDeskAPI:
@@ -24,6 +32,7 @@ class RepairDeskAPI:
         self.base_url = base_url or get_api_base_url()
         self.tickets_per_page = get_tickets_per_page()
         self.auth_mode = auth_mode or get_auth_mode()
+        self.last_request_outcome = RequestOutcome()
 
     def _build_endpoints(self):
         base = (self.base_url or get_api_base_url()).rstrip("/")
@@ -36,6 +45,7 @@ class RepairDeskAPI:
         }
 
     def _request(self, method, url, *, params=None, json_payload=None, timeout=30):
+        self.last_request_outcome = RequestOutcome()
         params = dict(params or {})
         headers = {"Content-Type": "application/json"}
         auth_mode = self.auth_mode or get_auth_mode()
@@ -54,15 +64,26 @@ class RepairDeskAPI:
         attempts = 3
         last_response = None
         for attempt in range(1, attempts + 1):
-            response = requests.request(
-                method,
-                url,
-                params=params,
-                json=json_payload,
-                headers=headers,
-                timeout=timeout,
-            )
+            try:
+                response = requests.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_payload,
+                    headers=headers,
+                    timeout=timeout,
+                )
+            except Exception:
+                self.last_request_outcome = RequestOutcome(
+                    attempts=attempt,
+                    status_code=None,
+                )
+                raise
             last_response = response
+            self.last_request_outcome = RequestOutcome(
+                attempts=attempt,
+                status_code=response.status_code,
+            )
 
             if response.status_code != 429:
                 response.raise_for_status()
