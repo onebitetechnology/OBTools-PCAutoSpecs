@@ -97,6 +97,50 @@ def test_logging_filter_redacts_nested_mapping_arguments():
     assert "'attempts': 3" in output
 
 
+def test_logging_filter_redacts_credentials_from_custom_object_arguments():
+    logger, _, stream = _capturing_logger("tests.log_safety.custom_object")
+
+    class CredentialBearingObject:
+        def __str__(self):
+            return "https://example.invalid?api_key=test-object-secret"
+
+    logger.error("failure: %s", CredentialBearingObject())
+
+    output = stream.getvalue()
+    assert "test-object-secret" not in output
+    assert "api_key=[REDACTED]" in output
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("X-API-Key: test-header-secret", "X-API-Key: [REDACTED]"),
+        (
+            "Authorization: Basic test-basic-secret",
+            "Authorization: Basic [REDACTED]",
+        ),
+    ],
+)
+def test_logging_filter_redacts_common_credential_headers(header, expected):
+    logger, _, stream = _capturing_logger("tests.log_safety.headers")
+
+    logger.error("request headers: %s", header)
+
+    output = stream.getvalue()
+    assert "test-" not in output
+    assert expected in output
+
+
+def test_logging_filter_redacts_api_key_header_in_mapping():
+    logger, _, stream = _capturing_logger("tests.log_safety.header_mapping")
+
+    logger.error("headers=%s", {"X-API-Key": "test-mapping-header-secret"})
+
+    output = stream.getvalue()
+    assert "test-mapping-header-secret" not in output
+    assert "[REDACTED]" in output
+
+
 def test_logging_filter_redacts_complete_chained_traceback():
     logger, _, stream = _capturing_logger("tests.log_safety.traceback")
 
@@ -135,6 +179,26 @@ def test_logging_filter_redacts_cached_exception_text():
     output = stream.getvalue()
     assert "test-cached-secret" not in output
     assert "access_token=[REDACTED]" in output
+
+
+def test_logging_filter_redacts_stack_info():
+    logger, handler, stream = _capturing_logger("tests.log_safety.stack")
+    record = logger.makeRecord(
+        logger.name,
+        logging.ERROR,
+        __file__,
+        1,
+        "stack failure",
+        (),
+        None,
+        sinfo="stack https://example.invalid?api_key=test-stack-secret",
+    )
+
+    handler.handle(record)
+
+    output = stream.getvalue()
+    assert "test-stack-secret" not in output
+    assert "api_key=[REDACTED]" in output
 
 
 def test_setup_logging_installs_redaction_on_file_handler(tmp_path, monkeypatch):
