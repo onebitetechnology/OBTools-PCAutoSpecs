@@ -43,8 +43,6 @@ def classify_drive_identity(drive: Mapping[str, object]) -> DriveIdentity:
         return None
     if result := media_identity(smart_media, 'smart'):
         return result
-    if result := media_identity(windows_media, 'windows'):
-        return result
     if drive.get('smart_available_spare') is not None:
         return DriveIdentity('NVMe SSD', 'smart')
     # Generic Fixed hard disk media is returned for SSDs too.
@@ -52,6 +50,8 @@ def classify_drive_identity(drive: Mapping[str, object]) -> DriveIdentity:
         return DriveIdentity('NVMe SSD', 'model')
     if 'SSD' in model:
         return DriveIdentity('SATA SSD' if bus == 'SATA' else 'SSD', 'model')
+    if result := media_identity(windows_media, 'windows'):
+        return result
     return DriveIdentity('Unknown', 'unknown')
 
 

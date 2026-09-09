@@ -25,7 +25,9 @@ def test_sanitized_fixture_contract(fixture_dir):
     ({'status':'Failed','health_percent':None},'Unknown','unknown'),
     ({'smart_bus_type':'Unknown','windows_bus_type':'NVMe'},'NVMe SSD','windows'),
     ({'smart_bus_type':'Unspecified','windows_bus_type':'SATA','windows_media_type':'SSD','model':'Example HDD'},'SATA SSD','windows'),
-    ({'windows_media_type':'HDD','model':'Example SSD'},'HDD','windows'),
+    ({'windows_media_type':'HDD','model':'Example SSD'},'SSD','model'),
+    ({'windows_media_type':'Hard Disk','windows_bus_type':'SATA','model':'Example NVMe SSD'},'NVMe SSD','model'),
+    ({'smart_media_type':'HDD','model':'Example SSD'},'HDD','smart'),
 ])
 def test_identity(evidence, expected, source):
     result = classify_drive_identity(evidence)
