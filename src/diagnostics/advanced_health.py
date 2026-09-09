@@ -1911,9 +1911,9 @@ def collect_boot_time() -> Dict[str, Any]:
     Measure system boot time from Event Viewer.
 
     Critical for quantifying "slow boot" complaints:
-    - < 15s: Excellent (NVMe SSD)
-    - 15-30s: Good (SATA SSD)
-    - 30-60s: Fair (HDD or slow SSD)
+    - < 15s: Excellent
+    - 15-30s: Good
+    - 30-60s: Fair (boot performance)
     - > 60s: Poor (problem detected)
 
     Returns:
@@ -1958,11 +1958,11 @@ def collect_boot_time() -> Dict[str, Any]:
 
             # Classify boot time
             if boot_time_s < 15:
-                classification = "Excellent (NVMe SSD performance)"
+                classification = "Excellent (boot performance)"
             elif boot_time_s < 30:
-                classification = "Good (SATA SSD performance)"
+                classification = "Good (boot performance)"
             elif boot_time_s < 60:
-                classification = "Fair (HDD or slow SSD)"
+                classification = "Fair (boot performance)"
             else:
                 classification = "Poor (performance issue detected)"
 

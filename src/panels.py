@@ -5,6 +5,7 @@ ActivityLogPanel: colored log output with context menu.
 """
 
 import re
+from hardware_classification import classify_drive_identity, assess_drive_performance
 from diagnostics.thermal_summary import cpu_temperature_rows
 import logging
 from PySide6.QtCore import Qt, Signal
@@ -702,39 +703,9 @@ class SystemInfoPanel(QWidget):
     @staticmethod
     def _detect_drive_type(model, health_data):
         """Determine drive type from model name and SMART data."""
-        m = model.upper()
-        # NVMe — model name or SMART attributes
-        if 'NVME' in m or 'NVM' in m:
-            return 'NVMe SSD'
-        if health_data and health_data.get('available_spare') is not None:
-            return 'NVMe SSD'
-        # USB / Removable
-        if 'USB' in m:
-            return 'USB'
-        if health_data and health_data.get('status') == 'N/A':
-            return 'USB'
-        # Explicit SSD in name
-        if 'SSD' in m:
-            return 'SATA SSD'
-        # Known SSD model substrings (WMI often prepends manufacturer)
-        ssd_patterns = (
-            'WDS',     # WD Blue/Green SSD
-            'MZVL', 'MZ7', 'MZ-',  # Samsung SSD
-            'SSDPE', 'SSDSC',  # Intel SSD
-            'SA400', 'A2000', 'SNV',  # Kingston SSD
-            'SPCC',    # Silicon Power SSD
-        )
-        for pattern in ssd_patterns:
-            if pattern in m:
-                return 'SATA SSD'
-        # SMART: has percentage_used → SSD
-        if health_data and health_data.get('percentage_used') is not None:
-            return 'SSD'
-        # Has reallocated sectors → SATA (could be HDD or SSD)
-        if health_data and health_data.get('reallocated_sectors') is not None:
-            # Could be HDD or SATA SSD — check read speed if available
-            return 'SATA'
-        return None
+        drive = dict(health_data or {})
+        drive.setdefault('model', model)
+        return drive.get('physical_type') or drive.get('friendly_type') or classify_drive_identity(drive).physical_type
 
     def _update_storage(self, specs):
         sec = self._sec_storage
@@ -766,12 +737,12 @@ class SystemInfoPanel(QWidget):
                 drive_mapping[letter] = {'info': info, 'health': None}
 
         # Match health to drives
-        for health_item in storage_health:
-            model = health_item.get('model', '')
-            for letter, data in drive_mapping.items():
-                if model and model in data['info']:
-                    data['health'] = health_item
-                    break
+        for letter, data in drive_mapping.items():
+            matches = [h for h in storage_health if letter in h.get('drive_letters', [])]
+            if not matches:
+                matches = [h for h in storage_health if h.get('model') and h['model'] in data['info']]
+            if len(matches) == 1:
+                data['health'] = matches[0]
 
         # Display each drive
         for i, (letter, data) in enumerate(sorted(drive_mapping.items())):
@@ -787,6 +758,8 @@ class SystemInfoPanel(QWidget):
             # Strip "(Fixed hard disk media)", "(Removable Media)", etc.
             clean_name = re.sub(r'\s*\([^)]*media[^)]*\)', '', raw_name,
                                 flags=re.IGNORECASE).strip()
+            if health:
+                clean_name = re.sub(r'\s*\((?:NVMe SSD|SATA SSD|SSD|HDD|USB|Virtual Disk|Unknown)\)\s*$', '', clean_name, flags=re.IGNORECASE)
             drive_type = self._detect_drive_type(clean_name, health)
             # Don't append type if it's already obvious from the name
             if drive_type and drive_type.upper() not in clean_name.upper():
@@ -816,7 +789,7 @@ class SystemInfoPanel(QWidget):
 
                 disk_index = health.get('disk_index')
                 drive_test = drive_test_results.get(str(disk_index)) if disk_index is not None else None
-                if str(health.get('friendly_type') or '').upper() == 'HDD' and disk_index is not None:
+                if str((health.get('physical_type') or health.get('friendly_type')) or '').upper() == 'HDD' and disk_index is not None:
                     status_text, status_color = self._format_drive_extended_test_summary(drive_test)
                     test_row = sec.add_info_row('Extended HDD Test', status_text, color=status_color)
                     test_row.set_click_handler(
@@ -830,12 +803,9 @@ class SystemInfoPanel(QWidget):
                 if ds.get('status') == 'ok':
                     rd = ds.get('display_read_mb_s', ds.get('read_mb_s', 0))
                     wr = ds.get('display_write_mb_s', ds.get('write_mb_s', 0))
-                    if rd > 2000:
-                        cat, col = 'NVMe', COLORS['success']
-                    elif rd > 400:
-                        cat, col = 'SATA SSD', COLORS['info']
-                    else:
-                        cat, col = 'HDD/Slow', COLORS['warning']
+                    performance = assess_drive_performance(read_mb_s=rd, write_mb_s=wr)
+                    cat = performance.band + ' performance'
+                    col = COLORS.get(performance.severity, COLORS['text_secondary'])
                     suffix = " (cached read corrected)" if ds.get('cached_read_likely') else ""
                     sec.add_info_row(
                         'Disk Speed',
@@ -1847,11 +1817,11 @@ class SystemInfoPanel(QWidget):
         boot_sec = data.get('boot_time_seconds')
         if boot_sec is not None:
             if boot_sec < 15:
-                rating, color = 'Excellent (NVMe SSD)', COLORS['success']
+                rating, color = 'Excellent', COLORS['success']
             elif boot_sec < 30:
-                rating, color = 'Good (SATA SSD)', COLORS['success']
+                rating, color = 'Good', COLORS['success']
             elif boot_sec < 60:
-                rating, color = 'Fair (slow SSD or HDD)', COLORS['warning']
+                rating, color = 'Fair', COLORS['warning']
             else:
                 rating, color = 'Slow (investigate)', COLORS['error']
             dlg.add_row("Boot Speed", f"{boot_sec:.1f} seconds — {rating}",

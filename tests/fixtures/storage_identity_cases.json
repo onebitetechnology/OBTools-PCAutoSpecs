@@ -1,0 +1,9 @@
+[
+  {"evidence": {"model": "Example", "windows_media_type": "Fixed hard disk media", "smart_bus_type": "NVMe"}, "physical_type": "NVMe SSD"},
+  {"evidence": {"model": "SanDisk X600", "smart_media_type": "SSD", "smart_bus_type": "SATA"}, "physical_type": "SATA SSD"},
+  {"evidence": {"smart_media_type": "HDD", "smart_bus_type": "SATA"}, "physical_type": "HDD"},
+  {"evidence": {"smart_media_type": "SSD", "smart_bus_type": "RAID"}, "physical_type": "SSD"},
+  {"evidence": {"model": "Microsoft Virtual Disk"}, "physical_type": "Virtual Disk"},
+  {"evidence": {"windows_bus_type": "USB"}, "physical_type": "USB"},
+  {"evidence": {"windows_bus_type": "SATA", "windows_media_type": "Fixed hard disk media"}, "physical_type": "Unknown"}
+]

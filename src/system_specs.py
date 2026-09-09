@@ -5,7 +5,7 @@ Fixed issues: storage duplication, serial number detection, enhanced GPU info, b
 """
 
 import platform
-from hardware_classification import classify_intel_cpu, normalize_cpu_clocks
+from hardware_classification import classify_intel_cpu, normalize_cpu_clocks, classify_drive_identity
 import sys
 import logging
 import subprocess
@@ -109,7 +109,7 @@ def _build_smartctl_device_types(drive_info):
 
     bus_type = str(drive_info.get('bus_type') or '').upper()
     interface = str(drive_info.get('interface') or '').upper()
-    friendly_type = str(drive_info.get('friendly_type') or '').upper()
+    friendly_type = str((drive_info.get('physical_type') or drive_info.get('friendly_type')) or '').upper()
 
     if bus_type == 'USB' or interface == 'USB':
         return []
@@ -451,7 +451,7 @@ def get_drive_extended_test_status(drive_info):
     if not drive_info:
         return {'status': 'unavailable', 'summary': 'Drive information unavailable'}
 
-    drive_type = str(drive_info.get('friendly_type') or '').upper()
+    drive_type = str((drive_info.get('physical_type') or drive_info.get('friendly_type')) or '').upper()
     if drive_type != 'HDD':
         return {'status': 'unsupported', 'summary': 'Extended test currently supported for HDDs only'}
 
@@ -499,7 +499,7 @@ def start_drive_extended_test(drive_info):
     if not drive_info:
         return {'status': 'unavailable', 'summary': 'Drive information unavailable'}
 
-    drive_type = str(drive_info.get('friendly_type') or '').upper()
+    drive_type = str((drive_info.get('physical_type') or drive_info.get('friendly_type')) or '').upper()
     if drive_type != 'HDD':
         return {'status': 'unsupported', 'summary': 'Extended test currently supported for HDDs only'}
 
@@ -1122,6 +1122,7 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
     else:
         log_message("Analyzing SMART data...")
         specs['StorageHealth'] = _get_storage_health_structured(com_wmi)
+        specs['Storage'] = _get_storage_info(com_wmi, specs['StorageHealth'])
     if specs['StorageHealth']:
         # Categorize drives: healthy, unhealthy, failed SMART, N/A (USB)
         # FIX: score is nested in interpretation dict, not top level
@@ -3299,7 +3300,7 @@ def _get_battery_status(com_wmi):
         return "Not Installed"
 
 
-def _get_storage_info(com_wmi):
+def _get_storage_info(com_wmi, storage_health=None):
     """Get storage information using psutil and COM/WMI - FIXED: No more duplication"""
     storage_details = []
     
@@ -3362,24 +3363,24 @@ def _get_storage_info(com_wmi):
                         disk = items.ItemIndex(i)
                         size = disk.Properties_("Size").Value
                         if size and int(size) > 0:
-                            size_gb = round(int(size) / (1024**3), 2)
                             disk_index = disk.Properties_("Index").Value
                             model = disk.Properties_("Model").Value or "Unknown"
                             media_type = disk.Properties_("MediaType").Value or "Unknown"
                             interface = disk.Properties_("InterfaceType").Value or "Unknown"
                             bus_type = _get_disk_bus_type(disk_index)
-                            friendly_type = _classify_basic_drive_type(model, media_type, interface, bus_type)
+                            health = next((d for d in (storage_health or []) if d.get('disk_index') == disk_index), None)
+                            friendly_type = (health.get('physical_type') if health else None) or _classify_basic_drive_type(model, media_type, interface, bus_type)
                             
-                            # Match physical drive to logical drives by size (approximate)
+                            # Match the actual physical disk to all its logical volumes.
+                            disk_letters = health.get('drive_letters', []) if health else _get_disk_drive_letters(disk_index)
                             for drive_letter, drive_info in drive_info_map.items():
-                                if abs(drive_info['total_gb'] - size_gb) < 10:  # Within 10GB tolerance
+                                if drive_letter in disk_letters:
                                     if 'model' not in drive_info:
                                         drive_info['model'] = model
                                         drive_info['media_type'] = media_type
                                         drive_info['interface'] = interface
                                         drive_info['bus_type'] = bus_type
                                         drive_info['friendly_type'] = friendly_type
-                                    break
             except Exception as e:
                 logging.debug(f"Could not get physical drive info: {e}")
         
@@ -3537,27 +3538,8 @@ def _get_disk_bus_type(disk_index):
 
 def _classify_basic_drive_type(model, media_type, interface, bus_type):
     """Classify drive type for overview text, independent of SMART availability."""
-    model_upper = (model or "").upper()
-    media_upper = (media_type or "").upper()
-    interface_upper = (interface or "").upper()
-    bus_upper = (bus_type or "").upper()
-
-    if bus_upper == "NVME":
-        return "NVMe SSD"
-    if bus_upper == "USB":
-        return "USB"
-    if bus_upper == "SATA" and ("SSD" in model_upper or "SSD" in media_upper or "SOLID STATE" in media_upper):
-        return "SATA SSD"
-    if bus_upper == "SATA" and ("HDD" in media_upper or "HARD DISK" in media_upper):
-        return "HDD"
-
-    if "NVME" in model_upper or "NVM" in model_upper or "NVME" in interface_upper:
-        return "NVMe SSD"
-    if "SSD" in model_upper or "SSD" in media_upper or "SOLID STATE" in media_upper:
-        return "SATA SSD"
-    if "HDD" in media_upper or "HARD DISK" in media_upper:
-        return "HDD"
-    return None
+    return classify_drive_identity({'model': model, 'windows_media_type': media_type,
+                                    'interface': interface, 'windows_bus_type': bus_type}).physical_type
 
 
 def _get_network_info(com_wmi):
@@ -4921,15 +4903,12 @@ def _get_storage_health_structured(com_wmi):
                             'interface': disk.Properties_("InterfaceType").Value or "Unknown",
                             'bus_type': _get_disk_bus_type(disk_index),
                         }
-                        drive_info['friendly_type'] = _classify_basic_drive_type(
-                            drive_info.get('model'),
-                            drive_info.get('media_type'),
-                            drive_info.get('interface'),
-                            drive_info.get('bus_type'),
-                        )
+                        drive_info['windows_media_type'] = drive_info['media_type']
+                        drive_info['windows_bus_type'] = drive_info['bus_type']
+                        drive_info['drive_letters'] = _get_disk_drive_letters(disk_index)
 
                         # USB drives - Skip SMART checking (unreliable for USB devices)
-                        if 'USB' in drive_model.upper():
+                        if drive_info['bus_type'] == 'USB':
                             drive_info['status'] = 'N/A'
                             drive_info['health_percent'] = None
                             drive_info['interpretation'] = {
@@ -4944,6 +4923,9 @@ def _get_storage_health_structured(com_wmi):
                             # Get SMART status and health percentage for non-USB drives
                             smart_data = _get_disk_smart_structured(disk_index)
                             if smart_data:
+                                for key in ('media_type', 'bus_type', 'available_spare'):
+                                    if key in smart_data:
+                                        drive_info['smart_' + key] = smart_data[key]
                                 drive_info.update(smart_data)
                             else:
                                 drive_info['status'] = 'Unknown'
@@ -4953,6 +4935,10 @@ def _get_storage_health_structured(com_wmi):
                             interpretation = _interpret_smart_data(smart_data, drive_model, drive_size_gb)
                             drive_info['interpretation'] = interpretation
                         
+                        identity = classify_drive_identity(drive_info)
+                        drive_info['physical_type'] = identity.physical_type
+                        drive_info['friendly_type'] = identity.physical_type
+                        drive_info['classification_source'] = identity.evidence_source
                         drives.append(drive_info)
             except Exception as e:
                 logging.debug(f"Failed to get storage health via COM/WMI: {e}")
@@ -6874,7 +6860,7 @@ def _get_macos_specs(progress_callback=None):
                 temp_info = smart_data.get("temperature", {})
                 if temp_info.get("current"):
                     drive['temperature'] = temp_info['current']
-                rot = smart_data.get("rotation_rate", 0)
+                rot = smart_data.get("rotation_rate")
                 if rot == 0:
                     drive['media_type'] = "SSD"
                 elif rot and rot > 0:
@@ -6882,6 +6868,11 @@ def _get_macos_specs(progress_callback=None):
                 pct_used = smart_data.get("nvme_smart_health_information_log", {}).get("percentage_used", None)
                 if pct_used is not None:
                     drive['health_percent'] = max(0, 100 - pct_used)
+                drive['smart_media_type'] = drive.get('media_type')
+                drive['smart_bus_type'] = smart_data.get('device', {}).get('protocol')
+                identity = classify_drive_identity(drive)
+                drive.update(physical_type=identity.physical_type, friendly_type=identity.physical_type,
+                             classification_source=identity.evidence_source)
                 storage_health.append(drive)
             except Exception:
                 pass

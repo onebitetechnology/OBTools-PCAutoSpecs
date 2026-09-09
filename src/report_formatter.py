@@ -12,6 +12,7 @@ Usage:
 """
 
 import re
+from hardware_classification import classify_drive_identity, assess_drive_performance
 from diagnostics.thermal_summary import cpu_temperature_rows, cpu_temperature_issues
 from datetime import datetime
 from pathlib import Path
@@ -341,9 +342,9 @@ class ReportFormatter:
         total_gb = total_value * 1000 if total_unit == 'TB' else total_value
         used_gb = max(0.0, total_gb - free_gb)
 
-        drive_type = None if self._line_already_has_drive_type(descriptor) else self._classify_drive_type_from_storage_health(
-            line, storage_health
-        )
+        drive_type = self._classify_drive_type_from_storage_health(line, storage_health)
+        if drive_type:
+            descriptor = re.sub(r'\s*\((?:NVMe SSD|SATA SSD|SSD|HDD|USB|Virtual Disk|Unknown)\)\s*$', '', descriptor, flags=re.IGNORECASE)
         if not drive_type and not self._line_already_has_drive_type(descriptor):
             drive_type = self._classify_drive_type_from_line(descriptor)
         if drive_type:
@@ -410,29 +411,7 @@ class ReportFormatter:
 
     @staticmethod
     def _classify_drive_type(drive):
-        friendly_type = drive.get('friendly_type')
-        if friendly_type:
-            return friendly_type
-        bus_type = (drive.get('bus_type') or '').upper()
-        model = (drive.get('model') or '').upper()
-        media = (drive.get('media_type') or '').upper()
-        if bus_type == 'NVME':
-            return 'NVMe SSD'
-        if bus_type == 'SATA' and ('SSD' in model or 'SSD' in media or 'SOLID STATE' in media):
-            return 'SATA SSD'
-        if bus_type == 'SATA' and ('HDD' in media or 'HARD DISK' in media):
-            return 'HDD'
-        if bus_type == 'USB':
-            return 'USB'
-        if 'NVME' in model or 'NVM' in model or drive.get('available_spare') is not None:
-            return 'NVMe SSD'
-        if 'USB' in model or drive.get('status') == 'N/A':
-            return 'USB'
-        if 'SSD' in model or 'SSD' in media or 'SOLID STATE' in media:
-            return 'SATA SSD'
-        if 'HDD' in media or 'HARD DISK' in media:
-            return 'HDD'
-        return None
+        return drive.get('physical_type') or drive.get('friendly_type') or classify_drive_identity(drive).physical_type
 
     @staticmethod
     def _extract_drive_letter(line):
@@ -446,17 +425,22 @@ class ReportFormatter:
         if 'NVME' in upper or 'NVM EXPRESS' in upper:
             return 'NVMe SSD'
         if 'SSD' in upper:
-            return 'SATA SSD'
+            return 'SATA SSD' if 'SATA' in upper else 'SSD'
         if 'HDD' in upper:
             return 'HDD'
         return None
 
     def _classify_drive_type_from_storage_health(self, storage_line, storage_health):
         storage_upper = (storage_line or '').upper()
-        for drive in storage_health or []:
-            model = (drive.get('model') or '').strip()
-            if model and model.upper() in storage_upper:
-                return self._classify_drive_type(drive)
+        letter = self._extract_drive_letter(storage_line)
+        matches = [drive for drive in (storage_health or [])
+                   if letter and letter[0] in drive.get('drive_letters', [])]
+        if not matches:
+            matches = [drive for drive in (storage_health or [])
+                       if str(drive.get('model') or '').strip()
+                       and str(drive['model']).strip().upper() in storage_upper]
+        if len(matches) == 1:
+            return self._classify_drive_type(matches[0])
         return None
 
     def _find_drive_for_disk_speed(self, specs):
@@ -470,6 +454,10 @@ class ReportFormatter:
         if not storage_health:
             return None
 
+        mapped = [d for d in storage_health if 'C' in [str(x).rstrip(':\\').upper() for x in d.get('drive_letters', [])]]
+        if len(mapped) == 1:
+            return mapped[0]
+
         storage_text = specs.get('Storage', '') or ''
         c_line = ''
         for line in storage_text.splitlines():
@@ -479,16 +467,12 @@ class ReportFormatter:
 
         if c_line:
             c_upper = c_line.upper()
-            for drive in storage_health:
-                model = str(drive.get('model') or '').strip().upper()
-                if model and model in c_upper:
-                    return drive
+            matches = [drive for drive in storage_health
+                       if str(drive.get('model') or '').strip()
+                       and str(drive['model']).strip().upper() in c_upper]
+            if len(matches) == 1:
+                return matches[0]
 
-            c_type = self._classify_drive_type_from_line(c_line)
-            if c_type:
-                for drive in storage_health:
-                    if self._classify_drive_type(drive) == c_type:
-                        return drive
 
         if len(storage_health) == 1:
             return storage_health[0]
@@ -513,8 +497,7 @@ class ReportFormatter:
         drive = self._find_drive_for_disk_speed(specs)
         drive_type = self._classify_drive_type(drive) if drive else None
         drive_model = str(drive.get('model') or '').strip() if drive else ''
-        drive_upper = f"{drive_type or ''} {drive_model}".upper()
-        is_ssd = 'SSD' in drive_upper or 'NVME' in drive_upper
+        is_ssd = drive_type in ('NVMe SSD', 'SATA SSD', 'SSD')
 
         speed_text = f"Read {read_mb:.0f} MB/s, Write {write_mb:.0f} MB/s"
         if disk_speed.get('cached_read_likely'):
@@ -525,17 +508,17 @@ class ReportFormatter:
             if drive_model:
                 drive_label = f"{drive_model} ({drive_label})"
             return (
-                f"Drive Speed: CRITICAL - {drive_label} is performing at HDD/Slow speeds "
+                f"Drive Performance: CRITICAL - {drive_label} measured below the SSD service threshold "
                 f"({speed_text}) - investigate drive/controller health or replace the SSD"
             )
 
         if read_mb < 80 or write_mb < 50:
             return (
-                f"Drive Speed: VERY SLOW ({speed_text} - possible drive failure or HDD)"
+                f"Drive Performance: VERY SLOW ({speed_text} - investigate drive performance)"
             )
         if read_mb < 200 or write_mb < 100:
             return (
-                f"Drive Speed: SLOW ({speed_text} - consider SSD upgrade)"
+                f"Drive Performance: SLOW ({speed_text} - investigate drive performance)"
             )
         return None
 
@@ -713,7 +696,7 @@ class ReportFormatter:
         if 'storage' not in skip_cats:
             drive_tests = specs.get('DriveExtendedTests', {}) or {}
             for drive in specs.get('StorageHealth', []) or []:
-                if str(drive.get('friendly_type') or '').upper() != 'HDD':
+                if str(drive.get('physical_type') or drive.get('friendly_type') or '').upper() != 'HDD':
                     continue
                 disk_index = drive.get('disk_index')
                 result = drive_tests.get(str(disk_index), {})
@@ -893,7 +876,7 @@ class ReportFormatter:
         drive_tests = specs.get('DriveExtendedTests', {}) or {}
         if 'storage' not in skip_cats:
             for drive in specs.get('StorageHealth', []) or []:
-                if str(drive.get('friendly_type') or '').upper() != 'HDD':
+                if str(drive.get('physical_type') or drive.get('friendly_type') or '').upper() != 'HDD':
                     continue
                 disk_index = drive.get('disk_index')
                 result = drive_tests.get(str(disk_index), {})
@@ -1480,12 +1463,12 @@ class ReportFormatter:
             if drive.get('media_errors') and drive['media_errors'] > 0:
                 lines.append(f"<strong>Media Errors:</strong> {drive['media_errors']}")
 
-            # Only show media type if it's actually known
-            media_type = drive.get('media_type', '')
+            # Identity is normalized independently of SMART health and speed.
+            media_type = self._classify_drive_type(drive)
             if media_type and media_type.lower() != 'unknown':
                 lines.append(f"<strong>Type:</strong> {media_type}")
 
-            if str(drive.get('friendly_type') or '').upper() == 'HDD':
+            if str(drive.get('physical_type') or drive.get('friendly_type') or '').upper() == 'HDD':
                 disk_index = drive.get('disk_index')
                 test_result = drive_tests.get(str(disk_index), {})
                 if test_result:
@@ -1515,12 +1498,7 @@ class ReportFormatter:
         if disk_speed.get('status') == 'ok':
             read_speed = disk_speed.get('display_read_mb_s', disk_speed.get('read_mb_s', 0))
             write_speed = disk_speed.get('display_write_mb_s', disk_speed.get('write_mb_s', 0))
-            if read_speed > 2000:
-                speed_cat = 'NVMe'
-            elif read_speed > 400:
-                speed_cat = 'SATA SSD'
-            else:
-                speed_cat = 'HDD/Slow'
+            speed_cat = assess_drive_performance(read_mb_s=read_speed, write_mb_s=write_speed).band + ' performance'
             suffix = " (cached read corrected)" if disk_speed.get('cached_read_likely') else ""
             lines.append(f"<strong>Disk Speed (C:):</strong> {read_speed:.0f} MB/s read, {write_speed:.0f} MB/s write ({speed_cat}){suffix}")
 
