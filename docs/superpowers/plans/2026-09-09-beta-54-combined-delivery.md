@@ -33,6 +33,7 @@ Each functional slice agrees with its detailed implementation plan. One wording 
 - CPU review approved f7bf35f; storage review approved 661cd2e after generic-media precedence correction; display review approved 79a8687 after ambiguous-identity duplicate correction.
 - Combined reliability/metadata implementation: 9801b96. Local suite: 228 passed, one PowerShell execution test skipped because this Mac lacks the runtime. The test must run in Windows CI.
 - Installer, settings, and package versions agree on 2.2.45-beta.54.
-- Public GitHub branch push awaits explicit user approval requested through the app; automatic approval review rejected source publication. No new commits have been pushed.
+- Jeff explicitly approved the public GitHub branch push and Windows build. Branch published to the existing repository; main and release tags remain unchanged.
+- Initial Windows run 34414209778 executed all229 tests, including the production PowerShell fixture. Six test failures exposed locale-default file decoding in tests; explicit UTF-8 reads corrected the test inputs. Packaging stopped before producing artifacts, as required.
 - Final independent source review accepted the combined CPU/storage/display/reliability changes for Windows build and user testing, with no new important code finding. This does not qualify the unbuilt Windows artifacts or unperformed physical tests.
 - Storage precedence clarification: authoritative SMART/Get-PhysicalDisk evidence outranks model markers, which outrank generic Win32_DiskDrive media text. Getting this wrong could mislabel HDD/SSD and select inappropriate extended tests; the reviewed regression cases cover the conflict.

@@ -4,7 +4,7 @@ from hardware_classification import classify_drive_identity, assess_drive_perfor
 
 def test_sanitized_fixture_contract(fixture_dir):
     import json
-    for case in json.loads((fixture_dir / 'storage_identity_cases.json').read_text()):
+    for case in json.loads((fixture_dir / 'storage_identity_cases.json').read_text(encoding='utf-8')):
         assert classify_drive_identity(case['evidence']).physical_type == case['physical_type']
 
 

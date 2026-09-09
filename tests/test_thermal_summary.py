@@ -29,7 +29,7 @@ def test_ramp_visibility(ramp,load,show):
 
 
 def test_audited_thermal_fixture(fixture_dir):
-    for case in json.loads((fixture_dir / 'cpu_thermal_cases.json').read_text()):
+    for case in json.loads((fixture_dir / 'cpu_thermal_cases.json').read_text(encoding='utf-8')):
         result = summarize_cpu_temperature(ramp_samples=case['ramp'],load_samples=case['load'],
             thermal_limit_c=100,aborted=case['aborted'],independent_throttle_detected=case['evidence'])
         assert result['throttling_evidence'] == case['expected']

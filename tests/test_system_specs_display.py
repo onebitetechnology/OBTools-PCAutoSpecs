@@ -12,7 +12,7 @@ def connection_json(monkeypatch, payload, returncode=0):
 
 
 def test_connection_collector(monkeypatch, fixture_dir):
-    connection_json(monkeypatch, (fixture_dir / 'display_connections.json').read_text())
+    connection_json(monkeypatch, (fixture_dir / 'display_connections.json').read_text(encoding='utf-8'))
     records = specs._get_monitor_connection_records()
     assert [r['role'] for r in records] == ['internal', 'external', 'unknown']
     assert records[0]['instance_name'] == r'DISPLAY\CMN15F5\INTERNAL'
@@ -99,7 +99,7 @@ def test_actual_powershell_with_external_record_first(monkeypatch, fixture_dir):
             pytest.fail('Windows PowerShell must be available to verify production scripts')
         pytest.skip('PowerShell runtime unavailable; enable PCAUTOSPEC_TEST_PWSH')
     run = specs.subprocess.run
-    prelude = (fixture_dir / 'display_wmi.ps1').read_text()
+    prelude = (fixture_dir / 'display_wmi.ps1').read_text(encoding='utf-8')
     def fixture_run(args, **kwargs):
         # PowerShell parses and runs the exact script emitted by the collector.
         return run([pwsh, '-NoProfile', '-Command', prelude + '\n' + args[-1]],

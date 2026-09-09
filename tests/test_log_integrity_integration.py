@@ -28,7 +28,7 @@ def test_previous_is_read_only(tmp_path, caplog):
 @pytest.mark.parametrize('outcome', [0, 2, SystemExit(0), SystemExit(1), RuntimeError('startup failed')])
 def test_main_always_finalizes(tmp_path,monkeypatch,outcome):
     # Exercise actual entrypoint control flow without creating native Qt windows.
-    tree=ast.parse((Path(__file__).parents[1]/'src/AutoSpecUploaderGUI.py').read_text())
+    tree=ast.parse((Path(__file__).parents[1]/'src/AutoSpecUploaderGUI.py').read_text(encoding='utf-8'))
     main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
     path=tmp_path/'current.log'
     handler=logging.FileHandler(path,encoding='utf-8')
@@ -46,7 +46,7 @@ def test_main_always_finalizes(tmp_path,monkeypatch,outcome):
         ns['main']()
     handler.close()
     assert inspect_log_file(path).status=='complete'
-    data=path.read_text()
+    data=path.read_text(encoding='utf-8')
     expected=0 if outcome==0 or isinstance(outcome,SystemExit) and outcome.code==0 else (outcome if isinstance(outcome,int) else 1)
     assert ('Final Status: COMPLETE' if expected==0 else f'Final Status: ERROR (Application exit code {expected})') in data
     assert data.count('Session End')==1

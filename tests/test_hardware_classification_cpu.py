@@ -43,6 +43,6 @@ def test_invalid_clocks():
 
 def test_audited_identity_fixture(fixture_dir):
     from dataclasses import asdict
-    for case in json.loads((fixture_dir / 'cpu_identity_cases.json').read_text()):
+    for case in json.loads((fixture_dir / 'cpu_identity_cases.json').read_text(encoding='utf-8')):
         name = case.pop('name')
         assert asdict(classify_intel_cpu(name)) == case
