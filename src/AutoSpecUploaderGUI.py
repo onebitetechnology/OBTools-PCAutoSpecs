@@ -79,13 +79,15 @@ def _get_safe_windows_workdir():
             return candidate
     return None
 
+from log_integrity import warn_previous_log, finalize_log
+
 def setup_logging():
     """Set up file + console logging. Logs save to a logs/ folder next to the exe on the USB."""
     log_dir = Path(get_app_dir()) / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = log_dir / (
-        f"AutoSpecUploader_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+        f"AutoSpecUploader_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{os.getpid()}.log")
 
     detailed = logging.Formatter(
         '%(asctime)s | %(levelname)-8s | '
@@ -116,6 +118,7 @@ def setup_logging():
     logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 
     logging.info(f"Logging initialized - Log file: {log_file}")
+    warn_previous_log(log_file)
     return log_file
 
 
@@ -1560,6 +1563,22 @@ def main():
     """Main entry point — called from run.py."""
     app_start = datetime.now()
     log_file = setup_logging()
+    logging.info('Session Start: %s', app_start.isoformat(timespec='seconds'))
+    exit_code = 1
+    try:
+        exit_code = _run_application(app_start, log_file)
+    except SystemExit as exc:
+        exit_code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        raise
+    except Exception:
+        logging.critical('Application failed', exc_info=True)
+        raise
+    finally:
+        finalize_log(log_file, exit_code)
+    sys.exit(exit_code)
+
+
+def _run_application(app_start, log_file):
 
     # Session header
     logging.info("=" * 70)
@@ -1584,8 +1603,6 @@ def main():
         logging.info(f"Platform: Windows {wv.major}.{wv.minor} "
                      f"Build {wv.build}")
     logging.info(f"Python: {sys.version.split()[0]}")
-    logging.info(f"Session Start: "
-                 f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logging.info("=" * 70)
 
     # Create Qt application
@@ -1628,10 +1645,8 @@ def main():
     logging.info(f"Application main loop exited after "
                  f"{runtime:.2f} seconds")
     logging.info("=" * 70)
-    logging.info(f"Session End: "
-                 f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logging.info(f"Duration: {str(datetime.now() - app_start).split('.')[0]}")
-    logging.info("Final Status: SUCCESS (Diagnostics completed)")
+    # The outer main finalizer records application exit on every path.
     logging.info("=" * 70)
 
-    sys.exit(exit_code)
+    return exit_code

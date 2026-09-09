@@ -2,6 +2,19 @@
 
 ---
 
+## v2.2.45-beta.54 — 2026-09-09
+
+Combined diagnostic correctness and reliability candidate; physical USB qualification is pending.
+
+- Correct modern Intel/Core Ultra identification and preserve unknown CPU identity; label WMI clock evidence honestly.
+- Separate CPU ramp, sustained-load, and overall temperatures; preserve thermal aborts and distinguish suspected from confirmed throttling.
+- Keep NVMe/SATA/HDD/USB/virtual identity independent of benchmark speed, recompute identity after SMART enrichment, and label speed as performance.
+- Classify internal/external/unknown displays from connection evidence, preserve exact EDID measurements, and support the 16-inch nominal class.
+- Count all 14 advanced checks consistently, separating failed, unavailable, and skipped results; cancelled stress tests and absent dedicated GPUs are skipped.
+- Inspect prior and final diagnostic logs without repairing or deleting them. Missing footers may indicate active or interrupted sessions; corruption is an app/storage record, never a hardware diagnosis.
+- Finalize normal, cancelled-setup, duplicate-launch, and startup-error sessions with truthful application exit status; keep beta.50 credential filtering intact.
+- Align installer and Python versions, check native build exit codes, and extend offline regression/release gates. See the beta.54 qualification matrix for pending Windows packaging and USB checks.
+
 ## v2.2.45-beta.50 — 2026-08-31
 
 ### Credential-safe logs

@@ -14,6 +14,8 @@ All functions fail gracefully with status: "unavailable" if checks cannot be per
 
 import subprocess
 from diagnostics.thermal_summary import summarize_cpu_temperature
+from diagnostics.check_summary import CheckRecord, normalize_check_outcome, summarize_check_records
+from dataclasses import asdict
 import json
 import logging
 import os
@@ -2264,6 +2266,23 @@ def collect_webcam_info() -> Dict[str, Any]:
 
 
 
+ADVANCED_CHECK_REGISTRY = {
+    'event_viewer': 'Event Viewer summary',
+    'windows_update': 'Windows Update health',
+    'defender': 'Microsoft Defender',
+    'temperatures': 'Temperature data',
+    'startup_impact': 'Startup items',
+    'device_manager': 'Device Manager errors',
+    'power_plan': 'Active power plan',
+    'boot_time': 'Boot time',
+    'wifi': 'WiFi diagnostics',
+    'webcam': 'Webcam',
+    'disk_speed': 'Drive speed',
+    'cpu_load_temp': 'CPU temperature under load',
+    'memory_temp_c': 'Memory temperature',
+    'gpu_load_temp': 'GPU temperature under load',
+}
+
 def collect_advanced_health_summary(
         log_callback=None,
         stress_started_callback=None,
@@ -2295,18 +2314,18 @@ def collect_advanced_health_summary(
     skip = skip_categories or set()
     results = {}
 
-    checks = [
-        ("event_viewer",    "Event Viewer summary",    lambda: collect_event_viewer_summary(days=7), 30),
-        ("windows_update",  "Windows Update health",   collect_windows_update_health, 30),
-        ("defender",        "Microsoft Defender",       collect_defender_status, 20),
-        ("temperatures",    "Temperature data",         collect_temperatures, 15),
-        ("startup_impact",  "Startup items",            collect_startup_impact, 15),
-        ("device_manager",  "Device Manager errors",    collect_device_manager_errors, 20),
-        ("power_plan",      "Active power plan",        collect_active_power_plan, 10),
-        ("boot_time",       "Boot time",                collect_boot_time, 15),
-        ("wifi",            "WiFi diagnostics",         collect_wifi_info, 15),
-        ("webcam",          "Webcam",                   collect_webcam_info, 20),
-    ]
+    checks = [(key, ADVANCED_CHECK_REGISTRY[key], collector, timeout) for key, collector, timeout in [
+        ('event_viewer', lambda: collect_event_viewer_summary(days=7), 30),
+        ('windows_update', collect_windows_update_health, 30),
+        ('defender', collect_defender_status, 20),
+        ('temperatures', collect_temperatures, 15),
+        ('startup_impact', collect_startup_impact, 15),
+        ('device_manager', collect_device_manager_errors, 20),
+        ('power_plan', collect_active_power_plan, 10),
+        ('boot_time', collect_boot_time, 15),
+        ('wifi', collect_wifi_info, 15),
+        ('webcam', collect_webcam_info, 20),
+    ]]
 
     skip_map = {
         'event_viewer': 'event_logs',
@@ -2486,20 +2505,27 @@ def collect_advanced_health_summary(
                 )
             else:
                 _log("  No dedicated GPU detected — skipping GPU stress\n")
-                results['gpu_load_temp'] = {"status": "unavailable", "reason": "No dedicated GPU detected"}
+                results['gpu_load_temp'] = {"status": "skipped", "reason": "No dedicated GPU detected"}
         except Exception as e:
             logging.warning(f"GPU stress test failed: {e}")
             results['gpu_load_temp'] = {"status": "unavailable", "reason": str(e)}
 
     # Bridge device manager errors (detailed dicts) from AdvancedHealth
     dm = results.get('device_manager', {})
-    if dm.get('status') == 'ok' and dm.get('devices'):
+    if isinstance(dm, dict) and dm.get('status') == 'ok' and dm.get('devices'):
         results['_device_manager_errors'] = dm['devices']
 
-    # Count successful checks
-    successful = sum(1 for v in results.values() if isinstance(v, dict) and v.get("status") == "ok")
-    total = len(checks)
+    records = []
+    def record_result(key, value):
+        results[key] = value
+        records.append(CheckRecord(key, ADVANCED_CHECK_REGISTRY[key], normalize_check_outcome(value)))
 
-    _log(f"  Advanced health: {successful}/{total} checks completed")
+    # Only registered public checks contribute; derived metadata never does.
+    for key in ADVANCED_CHECK_REGISTRY:
+        record_result(key, results.get(key))
+    counts = summarize_check_records(records)
+    results['_check_summary'] = asdict(counts)
+    _log(f"Advanced health: {counts.passed}/{counts.attempted} attempted checks passed; "
+         f"{counts.failed} failed; {counts.unavailable} unavailable; {counts.skipped} skipped")
 
     return results

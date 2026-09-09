@@ -27,7 +27,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
           pip install -r requirements-dev.txt pyinstaller
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
