@@ -8,6 +8,57 @@ from typing import Literal, Mapping
 
 DriveType = Literal['NVMe SSD', 'SATA SSD', 'SSD', 'HDD', 'Virtual Disk', 'USB', 'Unknown']
 EvidenceSource = Literal['smart', 'windows', 'model', 'unknown']
+DisplayRole = Literal['internal', 'external', 'unknown']
+
+
+@dataclass(frozen=True)
+class DisplayConnection:
+    role: DisplayRole
+    connection_label: str
+
+
+def classify_display_connection(video_output_technology) -> DisplayConnection:
+    """Interpret D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY, never GPU identity."""
+    labels = {0: 'HD15/VGA', 1: 'S-Video', 2: 'Composite', 3: 'Component',
+              4: 'DVI', 5: 'HDMI', 6: 'LVDS', 8: 'D-Jpn', 9: 'SDI',
+              10: 'DisplayPort (External)', 11: 'DisplayPort (Embedded)',
+              12: 'UDI (External)', 13: 'UDI (Embedded)', 14: 'SDTV Dongle',
+              15: 'Miracast', 16: 'Indirect Wired', 2147483648: 'Internal'}
+    try:
+        if isinstance(video_output_technology, bool) or isinstance(video_output_technology, float):
+            raise ValueError
+        value = int(video_output_technology)
+        if not -2147483648 <= value <= 4294967295:
+            raise ValueError
+        value &= 0xffffffff
+    except (TypeError, ValueError, OverflowError):
+        value = None
+    if value not in labels:
+        return DisplayConnection('unknown', 'Other' if value == 4294967295 else 'Unknown connection')
+    return DisplayConnection('internal' if value in (6, 11, 13, 2147483648) else 'external', labels[value])
+
+
+@dataclass(frozen=True)
+class PanelSize:
+    exact_inches: float | None
+    nominal_inches: float | None
+    display_label: str
+
+
+def normalize_panel_size(exact_inches) -> PanelSize:
+    try:
+        exact = float(exact_inches)
+    except (TypeError, ValueError):
+        return PanelSize(None, None, 'Unavailable')
+    if not math.isfinite(exact) or exact <= 0:
+        return PanelSize(None, None, 'Unavailable')
+    nominal = min((10.1, 11.6, 12.5, 13.3, 14.0, 15.6, 16.0, 17.3, 18.4, 21.5, 24.0, 27.0), key=lambda n: abs(n-exact))
+    if abs(nominal-exact) > 0.6:
+        nominal = None
+    label = f'{exact:g} in measured'
+    if nominal is not None:
+        label += f' ({nominal:g}-inch class)'
+    return PanelSize(exact, nominal, label)
 
 
 @dataclass(frozen=True)

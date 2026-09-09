@@ -1595,15 +1595,16 @@ class ReportFormatter:
             return ["<strong>Monitors</strong>", "<strong>Status:</strong> Test skipped"]
 
         # Check if laptop (has panel details)
-        panel_details = specs.get('PanelDetails', {})
+        from display_presentation import display_groups
+        panel_details, additional_internal, external, unknown = display_groups(specs)
 
         if panel_details and isinstance(panel_details, dict):
             # LAPTOP: Show detailed LCD panel information (for parts ordering)
             # Build a one-line summary for the header: size + manufacturer
-            size_str = (str(panel_details['size_inches']) + '"') if panel_details.get('size_inches') else ''
+            size_str = panel_details.get('size_display') or ((str(panel_details['size_inches']) + '"') if panel_details.get('size_inches') else '')
             mfr_str  = panel_details.get('manufacturer', '')
             header_parts = [p for p in [size_str, mfr_str, 'Built-in LCD Panel'] if p]
-            content.append(f"<strong>{' '.join(header_parts[:2])} Built-in LCD Panel:</strong>")
+            content.append(f"<strong>{' '.join(header_parts)}:</strong>")
             content.append("")
 
             # Panel identification (critical for parts ordering)
@@ -1620,6 +1621,8 @@ class ReportFormatter:
 
             # Display specifications
             # Size already shown in header — skip standalone line
+            if panel_details.get('size_cm_h') and panel_details.get('size_cm_v'):
+                content.append(f"<strong>Physical Size:</strong> {panel_details['size_cm_h']}cm × {panel_details['size_cm_v']}cm")
 
             if panel_details.get('resolution_h') and panel_details.get('resolution_v'):
                 res_h = panel_details['resolution_h']
@@ -1667,7 +1670,7 @@ class ReportFormatter:
                 content.append(f"<strong>Screen Size:</strong> {screen_size}")
 
         # External displays (for both laptops and desktops)
-        displays = specs.get('Display', '')
+        displays = external
 
         if displays:
             # Display is stored as a newline-separated string, split it
@@ -1676,12 +1679,18 @@ class ReportFormatter:
             else:
                 display_list = displays
 
-            if panel_details:
+            if panel_details or 'DisplayDetails' in specs:
                 # Laptop with external displays
                 content.append("<strong>External Displays:</strong>")
 
             for display in display_list:
                 content.append(f"<strong>{display}</strong>")
+
+        for display in additional_internal:
+            content.append(f"<strong>Built-in LCD Panel:</strong> {display}")
+        if unknown:
+            content.append('<strong>Unclassified Displays:</strong>')
+            content.extend(f'<strong>{display}</strong>' for display in unknown)
 
         # Webcam — append to display section
         advanced = specs.get('AdvancedHealth', {})

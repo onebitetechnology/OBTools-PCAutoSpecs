@@ -1,0 +1,5 @@
+[
+  {"instance_name":"display/cmn15f5/internal_0","video_output_technology":11},
+  {"instance_name":"DISPLAY\\DEL1234\\EXTERNAL_0","video_output_technology":5},
+  {"instance_name":"DISPLAY\\ACR1234\\UNKNOWN_0","video_output_technology":4294967295}
+]

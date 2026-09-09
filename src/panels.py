@@ -1066,12 +1066,12 @@ class SystemInfoPanel(QWidget):
             return
         system_type = specs.get('SystemType', 'Unknown')
         screen_size = specs.get('ScreenSize')
-        panel_details = specs.get('PanelDetails')
-        is_laptop = system_type == 'Laptop'
+        from display_presentation import display_groups
+        panel_details, additional_internal, external, unknown = display_groups(specs)
+        is_laptop = bool(panel_details) or ('DisplayDetails' not in specs and system_type == 'Laptop')
 
         # Parse external monitors
-        external = []
-        if isinstance(display_info, str) and display_info not in (
+        if 'DisplayDetails' not in specs and isinstance(display_info, str) and display_info not in (
                 'Unknown', 'Display information unavailable'):
             external = [l.strip() for l in display_info.split('\n')
                         if l.strip()]
@@ -1080,7 +1080,9 @@ class SystemInfoPanel(QWidget):
             # Built-in panel
             if panel_details and isinstance(panel_details, dict):
                 disp_text = ''
-                if panel_details.get('size_inches'):
+                if panel_details.get('size_display'):
+                    disp_text = panel_details['size_display']
+                elif panel_details.get('size_inches'):
                     disp_text = f"{panel_details['size_inches']}\""
                 if panel_details.get('resolution_v'):
                     rv = panel_details['resolution_v']
@@ -1094,7 +1096,7 @@ class SystemInfoPanel(QWidget):
                         disp_text += ' HD'
                 if panel_details.get('is_touch') is True:
                     disp_text += ' (Touch)'
-                sec.add_info_row('Built-in Panel', disp_text or screen_size or 'Unknown', bold=True)
+                sec.add_info_row('Built-in Panel', disp_text or panel_details.get('name') or screen_size or 'Unknown', bold=True)
             else:
                 sec.add_info_row('Built-in Panel', screen_size or 'Unknown', bold=True)
 
@@ -1164,9 +1166,15 @@ class SystemInfoPanel(QWidget):
                     if i > 0:
                         sec.add_group_gap()
                     txt = re.sub(r'^Display\s+\d+\s*', '', mon).strip()
-                    sec.add_info_row(f'Display {i + 1}', txt, bold=True)
+                    sec.add_info_row(f'External {i + 1}' if 'DisplayDetails' in specs else f'Display {i + 1}', txt, bold=True)
             else:
-                sec.add_info_row('Display', 'No display detected')
+                if not unknown:
+                    sec.add_info_row('Display', 'No display detected')
+
+        for i, mon in enumerate(additional_internal):
+            sec.add_info_row(f'Built-in Panel {i + 2}', mon, bold=True)
+        for i, mon in enumerate(unknown):
+            sec.add_info_row(f'Unclassified {i + 1}', mon, bold=True)
 
         # Webcam — shown in display section for all machine types
         advanced = specs.get('AdvancedHealth', {})

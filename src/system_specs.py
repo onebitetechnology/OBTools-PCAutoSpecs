@@ -5,7 +5,7 @@ Fixed issues: storage duplication, serial number detection, enhanced GPU info, b
 """
 
 import platform
-from hardware_classification import classify_intel_cpu, normalize_cpu_clocks, classify_drive_identity
+from hardware_classification import classify_intel_cpu, normalize_cpu_clocks, classify_drive_identity, classify_display_connection, normalize_panel_size
 import sys
 import logging
 import subprocess
@@ -1098,10 +1098,10 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
 
     # Display Information - Basic inventory is always collected; skip only affects panel/webcam diagnostics.
     log_message("Detecting Displays...")
-    specs['Display'] = _get_display_info(com_wmi)
-    if specs['Display'] and specs['Display'] != 'Display information unavailable':
-        display_lines = [l for l in specs['Display'].split('\n') if l.strip()]
-        log_message(f" {len(display_lines)} monitor(s)\n")
+    specs['Display'], specs['DisplayDetails'] = _get_display_info(com_wmi)
+    log_message(f" {len(specs['DisplayDetails'])} monitor(s)\n")
+    for display in specs['DisplayDetails']:
+        log_message(f"  {display['role']}: {display['name']} ({display['connection_type']})\n")
     _emit_specs()
 
     # BIOS Information - Enhanced (validated) - returns (first_line, remaining_lines)
@@ -1180,11 +1180,18 @@ def _get_windows_specs(log_callback=None, progress_callback=None, spec_callback=
         specs['ScreenSize'] = None
         specs['PanelDetails'] = None
     else:
-        specs['ScreenSize'] = _get_screen_size(com_wmi)
+        specs['ScreenSize'] = None
 
         # LCD Panel Details (Laptops) - Enhanced with manufacturer, model, year
-        if specs['SystemType'] == 'Laptop':
-            specs['PanelDetails'] = _get_panel_details()
+        internal = next((d for d in specs['DisplayDetails'] if d['role'] == 'internal'), None)
+        if internal:
+            specs['PanelDetails'] = _get_panel_details(internal['instance_name']) or {
+                'instance_name': internal['instance_name'], 'model_code': internal['model'],
+                'manufacturer': internal['manufacturer'], 'connection_role': 'internal',
+                'connection_type': internal['connection_type']}
+            specs['ScreenSize'] = specs['PanelDetails'].get('size_display')
+            panel = specs['PanelDetails']
+            log_message(f" Built-in Panel: {panel.get('model_code', 'Unknown')} — {panel.get('size_display', 'Size unavailable')}\n")
             battery_details = specs.get('BatteryDetails') or {}
             if battery_details.get('health_percent'):
                 log_message(f" {battery_details['health_percent']}% health\n")
@@ -3749,333 +3756,123 @@ def _decode_manufacturer_id(manufacturer_id):
     except:
         return f"ID_{manufacturer_id:04X}"
 
+def _normalize_monitor_instance(value):
+    """WMI appends a source suffix; PnP uses the same physical instance without it."""
+    return re.sub(r'_\d+$', '', re.sub(r'\\+', r'\\', str(value or '').replace('/', '\\')).upper().strip())
+
+
+def _monitor_display_id(instance):
+    parts = _normalize_monitor_instance(instance).split('\\')
+    return parts[1] if len(parts) > 1 and parts[0] == 'DISPLAY' else ''
+
+
+def _get_monitor_connection_records():
+    """Collect all connection evidence, including unknown connection technologies."""
+    script = r'''
+    @(Get-WmiObject -Namespace root\wmi -Class WmiMonitorConnectionParams -ErrorAction Stop |
+      ForEach-Object {
+        $conn = $_
+        $technology = $null
+        if ($null -ne $conn.VideoOutputTechnology) { $technology = [long]$conn.VideoOutputTechnology }
+        @{instance_name=$conn.InstanceName; video_output_technology=$technology}
+      }) | ConvertTo-Json -Compress
+    '''
+    try:
+        result = subprocess.run([_POWERSHELL_EXE, '-NoProfile', '-Command', script],
+                                capture_output=True, text=True, timeout=10,
+                                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+        if result.returncode:
+            raise ValueError('PowerShell monitor query failed')
+        data = json.loads(result.stdout or '[]')
+        if isinstance(data, dict):
+            data = [data]
+        records = []
+        for item in data or []:
+            if not isinstance(item, dict):
+                continue
+            instance = _normalize_monitor_instance(item.get('instance_name'))
+            if not instance:
+                continue
+            technology = item.get('video_output_technology')
+            connection = classify_display_connection(technology)
+            records.append(dict(instance_name=instance, display_id=_monitor_display_id(instance),
+                                video_output_technology=technology, role=connection.role,
+                                connection_type=connection.connection_label))
+        return records
+    except Exception as exc:
+        logging.debug(f'Monitor connection collection failed: {exc}')
+        return []
+
+
 def _get_display_info(com_wmi):
-    """Get display/monitor information with laptop internal display priority
-
-    For laptops: Prioritizes internal panel (LVDS/eDP) over external monitors
-    For desktops: Shows external monitors only
-    """
-    displays = []
-    internal_displays = []
-    external_displays = []
-
-    def _has_builtin_display_for_logic(com_wmi):
-        """Check if system has a built-in display (for display logic decisions)"""
-        try:
-            # Check for video controllers with internal display indicators
-            video_items = _query_com_wmi(com_wmi, "Win32_VideoController")
-            if video_items:
-                for i in range(video_items.Count):
-                    controller = video_items.ItemIndex(i)
-                    video_name = controller.Properties_("Name").Value
-
-                    # Internal display manufacturers (panel makers for AIOs and laptops)
-                    internal_indicators = ['innolux', 'lg display', 'au optronics', 'boe',
-                                         'samsung display', 'sharp display', 'chimei']
-                    if video_name and any(indicator in video_name.lower() for indicator in internal_indicators):
-                        return True
-
-            # Also check for integrated graphics controllers (common in AIOs)
-            integrated_indicators = ['intel', 'amd', 'integrated', 'embedded']
-            if video_items:
-                for i in range(video_items.Count):
-                    controller = video_items.ItemIndex(i)
-                    video_name = controller.Properties_("Name").Value
-                    if video_name and any(indicator in video_name.lower() for indicator in integrated_indicators):
-                        # Additional check: if we have battery, it's likely a laptop, not AIO
-                        battery_items = _query_com_wmi(com_wmi, "Win32_Battery")
-                        has_battery = battery_items and battery_items.Count > 0
-                        if not has_battery:
-                            return True
-            return False
-        except Exception as e:
-            logging.debug(f"Failed to check for built-in display: {e}")
-            return False
-
-    # Determine system type for display logic
-    system_type = "Unknown"
-    has_builtin_display = False
-
-    try:
-        if com_wmi:
-            # Get system type classification
-            system_type_result = _get_system_type(com_wmi)
-            if system_type_result:
-                system_type = system_type_result
-                logging.debug(f"Display detection: System type is {system_type}")
-
-            # Check for built-in display capability
-            has_builtin_display = _has_builtin_display_for_logic(com_wmi)
-            if has_builtin_display:
-                logging.debug("Display detection: System has built-in display capability")
-    except Exception as e:
-        logging.debug(f"Failed to determine system type for display logic: {e}")
-
-    try:
-        if com_wmi:
-            # For systems with built-in displays: Check for internal displays via VideoController
-            if system_type in ["Laptop", "All-in-One"] or (system_type == "Unknown" and has_builtin_display):
-                try:
-                    # Query video controllers to get internal display info
-                    video_items = _query_com_wmi(com_wmi, "Win32_VideoController")
-                    if video_items:
-                        for i in range(video_items.Count):
-                            controller = video_items.ItemIndex(i)
-                            video_name = controller.Properties_("Name").Value
-
-                            # Get current resolution from video controller
-                            current_h_res = controller.Properties_("CurrentHorizontalResolution").Value
-                            current_v_res = controller.Properties_("CurrentVerticalResolution").Value
-
-                            if video_name and current_h_res and current_v_res:
-                                display_info = f"{video_name} - {current_h_res}x{current_v_res}"
-                                # Check if this looks like an internal display
-                                # Internal displays often have manufacturer names like "Chimei Innolux", "LG Display", "AU Optronics", "BOE"
-                                internal_indicators = ['innolux', 'lg display', 'au optronics', 'boe', 'samsung display', 'sharp display']
-                                if any(indicator in video_name.lower() for indicator in internal_indicators):
-                                    internal_displays.append(display_info)
-                                    logging.debug(f"Found internal display: {display_info}")
-                except Exception as e:
-                    logging.debug(f"Failed to get video controller info for laptop display: {e}")
-
-            # Get external/desktop monitors using Win32_DesktopMonitor
-            try:
-                items = _query_com_wmi(com_wmi, "Win32_DesktopMonitor")
-                if items:
-                    for i in range(items.Count):
-                        monitor = items.ItemIndex(i)
-                        name = monitor.Properties_("Name").Value
-
-                        # For desktops, don't skip "Generic PnP Monitor" - get more detailed info
-                        if name:
-                            display_info = name
-                            width = monitor.Properties_("ScreenWidth").Value
-                            height = monitor.Properties_("ScreenHeight").Value
-
-                            # Try to get manufacturer and model info
-                            try:
-                                manufacturer = monitor.Properties_("MonitorManufacturer").Value
-                                if manufacturer and manufacturer != "(Standard monitor types)":
-                                    display_info = f"{manufacturer} {display_info}"
-                            except:
-                                pass
-
-                            try:
-                                model = monitor.Properties_("MonitorType").Value
-                                if model and model != display_info:
-                                    display_info = f"{display_info} ({model})"
-                            except:
-                                pass
-
-                            if width and height:
-                                display_info += f" - {width}x{height}"
-
-                                # Try to get refresh rate from video controller
-                                try:
-                                    video_items = _query_com_wmi(com_wmi, "Win32_VideoController")
-                                    if video_items and video_items.Count > 0:
-                                        controller = video_items.ItemIndex(0)  # Primary controller
-                                        refresh = controller.Properties_("CurrentRefreshRate").Value
-                                        if refresh:
-                                            display_info += f" @ {refresh}Hz"
-                                except Exception as e:
-                                    logging.debug(f"Failed to get refresh rate: {e}")
-
-                            external_displays.append(display_info)
-                            logging.debug(f"Found external display: {display_info}")
-                        else:
-                            logging.debug(f"Skipping monitor with no name")
-            except Exception as e:
-                logging.debug(f"Failed to get display info via COM/WMI monitors: {e}")
-
-            # Enhanced info: Try Win32_PnPEntity to get manufacturer and model from device IDs and EDID
-            try:
-                pnp_items = _query_com_wmi(com_wmi, "Win32_PnPEntity WHERE PNPClass='Monitor'")
-                if pnp_items:
-                    monitor_details = []
-                    for i in range(pnp_items.Count):
-                        pnp = pnp_items.ItemIndex(i)
-                        device_id = pnp.Properties_("DeviceID").Value
-                        name = pnp.Properties_("Name").Value
-
-                        if device_id:
-                            # Parse manufacturer from device ID
-                            manufacturer = None
-                            if "SAM" in device_id.upper():
-                                manufacturer = "Samsung"
-                            elif "GSM" in device_id.upper() or "LGD" in device_id.upper():
-                                manufacturer = "LG"
-                            elif "ACR" in device_id.upper():
-                                manufacturer = "Acer"
-                            elif "AOC" in device_id.upper():
-                                manufacturer = "AOC"
-                            elif "DEL" in device_id.upper():
-                                manufacturer = "Dell"
-                            elif "HP" in device_id.upper():
-                                manufacturer = "HP"
-
-                            # Try to get EDID data for detailed model info
-                            model_info = None
-                            try:
-                                # Access registry for EDID data
-                                import winreg
-                                edid_path = f"SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\{device_id}\\Device Parameters"
-                                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, edid_path)
-                                edid_data, _ = winreg.QueryValueEx(key, "EDID")
-                                winreg.CloseKey(key)
-
-                                if edid_data:
-                                    parsed_edid = _parse_edid_data(edid_data)
-                                    if parsed_edid and parsed_edid.get('model'):
-                                        model_info = parsed_edid['model']
-                                        # Override manufacturer if EDID has better info
-                                        if parsed_edid.get('manufacturer') and parsed_edid['manufacturer'] not in ['???', 'ID_']:
-                                            manufacturer = parsed_edid['manufacturer']
-                            except Exception as e:
-                                logging.debug(f"Failed to get EDID for {device_id}: {e}")
-
-                            if manufacturer or model_info:
-                                monitor_details.append({
-                                    'manufacturer': manufacturer,
-                                    'model': model_info or name,
-                                    'device_id': device_id
-                                })
-
-                    # If we found detailed monitor info, enhance the display list
-                    if monitor_details and external_displays:
-                        # Clear existing displays and rebuild with detailed info
-                        enhanced_displays = []
-                        for detail in monitor_details:
-                            model = detail['model'] or "Unknown Monitor"
-                            # Clean up model names
-                            if "Generic Monitor" in model:
-                                model = model.replace("Generic Monitor", "").strip()
-                                if model.startswith("(") and model.endswith(")"):
-                                    model = model[1:-1]  # Remove parentheses
-
-                            manufacturer = detail['manufacturer'] or ""
-                            if manufacturer and not model.startswith(manufacturer):
-                                display_name = f"{manufacturer} {model}"
-                            else:
-                                display_name = model
-
-                            # Add resolution and refresh rate info
-                            try:
-                                video_items = _query_com_wmi(com_wmi, "Win32_VideoController")
-                                if video_items and video_items.Count > 0:
-                                    controller = video_items.ItemIndex(0)
-                                    h_res = controller.Properties_("CurrentHorizontalResolution").Value
-                                    v_res = controller.Properties_("CurrentVerticalResolution").Value
-                                    refresh = controller.Properties_("CurrentRefreshRate").Value
-                                    if h_res and v_res:
-                                        display_name += f" - {h_res}x{v_res}"
-                                        if refresh:
-                                            display_name += f" @ {refresh}Hz"
-                            except Exception as e:
-                                logging.debug(f"Failed to add resolution info: {e}")
-
-                            enhanced_displays.append(display_name)
-
-                        if enhanced_displays:
-                            external_displays[:] = enhanced_displays
-                            logging.debug(f"Enhanced displays with EDID info: {enhanced_displays}")
-            except Exception as e:
-                logging.debug(f"Failed to enhance monitor info via PNP entities: {e}")
-
-            # Additional fallback: Try Win32_PnPEntity for more detailed monitor info
-            if not external_displays:
-                try:
-                    pnp_items = _query_com_wmi(com_wmi, "Win32_PnPEntity WHERE PNPClass='Monitor'")
-                    if pnp_items:
-                        for i in range(pnp_items.Count):
-                            pnp = pnp_items.ItemIndex(i)
-                            name = pnp.Properties_("Name").Value
-                            device_id = pnp.Properties_("DeviceID").Value
-
-                            if name and device_id:
-                                # Parse manufacturer from device ID
-                                manufacturer = "Unknown"
-                                if "SAM" in device_id.upper():
-                                    manufacturer = "Samsung"
-                                elif "GSM" in device_id.upper() or "LGD" in device_id.upper():
-                                    manufacturer = "LG"
-                                elif "ACR" in device_id.upper():
-                                    manufacturer = "Acer"
-                                elif "AOC" in device_id.upper():
-                                    manufacturer = "AOC"
-                                elif "DEL" in device_id.upper():
-                                    manufacturer = "Dell"
-                                elif "HP" in device_id.upper():
-                                    manufacturer = "HP"
-
-                                display_info = f"{manufacturer} {name}"
-
-                                # Try to get resolution from video controller
-                                try:
-                                    video_items = _query_com_wmi(com_wmi, "Win32_VideoController")
-                                    if video_items and video_items.Count > 0:
-                                        controller = video_items.ItemIndex(0)
-                                        h_res = controller.Properties_("CurrentHorizontalResolution").Value
-                                        v_res = controller.Properties_("CurrentVerticalResolution").Value
-                                        refresh = controller.Properties_("CurrentRefreshRate").Value
-                                        if h_res and v_res:
-                                            display_info += f" - {h_res}x{v_res}"
-                                            if refresh:
-                                                display_info += f" @ {refresh}Hz"
-                                except Exception as e:
-                                    logging.debug(f"Failed to get resolution/refresh from video controller: {e}")
-
-                                external_displays.append(display_info)
-                                logging.debug(f"Found monitor via PNP: {display_info}")
-                except Exception as e:
-                    logging.debug(f"Failed to get monitor info via PNP entities: {e}")
-
-        # Comprehensive priority logic for all system types
-        logging.debug(f"Display priority logic: System={system_type}, Built-in={has_builtin_display}, Internal={len(internal_displays)}, External={len(external_displays)}")
-
-        if system_type == "Laptop":
-            # Laptops: Prioritize internal panel, then external monitors
-            logging.debug("Applying laptop display logic: internal first, then external")
-            if internal_displays:
-                displays.extend(internal_displays)
-            if external_displays:
-                displays.extend(external_displays)
-
-        elif system_type == "All-in-One":
-            # All-in-One PCs: Show built-in display first, then external monitors
-            logging.debug("Applying AIO display logic: built-in first, then external")
-            if internal_displays:
-                displays.extend(internal_displays)
-            if external_displays:
-                displays.extend(external_displays)
-
-        elif system_type in ["Desktop", "Mini PC"]:
-            # Desktops and Mini PCs: External monitors only (no built-in display)
-            logging.debug("Applying desktop/mini-PC display logic: external monitors only")
-            displays.extend(external_displays)
-
+    """Join physical monitor records by instance; preserve ambiguous identities."""
+    details = []
+    def merge(record):
+        instance = record.get('instance_name', '')
+        matches = [d for d in details if instance and d['instance_name'] == instance]
+        # Model-only evidence is safe to join only when the match is unambiguous.
+        if not matches and instance:
+            matches = [d for d in details if d['display_id'] == record['display_id']
+                       and (len(instance.split('\\')) < 3 or len(d['instance_name'].split('\\')) < 3)]
+        if len(matches) == 1:
+            if len(instance.split('\\')) > len(matches[0]['instance_name'].split('\\')):
+                matches[0]['instance_name'] = instance
+            matches[0].update({k: v for k, v in record.items() if v and k not in ('instance_name', 'display_id')})
         else:
-            # Unknown system type - make intelligent decision based on capabilities
-            logging.debug("Applying fallback display logic for unknown system type")
-            if has_builtin_display and internal_displays:
-                # System has built-in display capability, show internal first
-                displays.extend(internal_displays)
-                displays.extend(external_displays)
-            else:
-                # No built-in display detected, show external only
-                displays.extend(external_displays)
+            item = dict(display_id=record.get('display_id', ''), instance_name=instance,
+                        name=record.get('display_id') or 'Unknown Monitor', manufacturer='',
+                        model=record.get('display_id', ''), role='unknown',
+                        connection_type='Unknown connection')
+            item.update(record)
+            details.append(item)
 
-        # Final fallback: if no displays detected at all, try to get any available monitor info
-        if not displays and external_displays:
-            logging.debug("No displays in final list, using external displays as fallback")
-            displays.extend(external_displays)
-
-        if displays:
-            return "\n".join(displays)
-        return "Display information unavailable"
-    except Exception as e:
-        logging.warning(f"Failed to get display info: {e}")
-        return "Display information unavailable"
+    for connection in _get_monitor_connection_records():
+        merge(connection)
+    for query, id_key in (("Win32_PnPEntity WHERE PNPClass='Monitor'", 'DeviceID'),
+                          ('Win32_DesktopMonitor', 'PNPDeviceID')):
+        try:
+            items = _query_com_wmi(com_wmi, query) if com_wmi else None
+            for i in range(items.Count if items else 0):
+                obj = items.ItemIndex(i)
+                def prop(key):
+                    try:
+                        return obj.Properties_(key).Value
+                    except Exception:
+                        return None
+                instance = _normalize_monitor_instance(prop(id_key))
+                if not instance:
+                    continue  # Do not invent physical identity from list position.
+                record = dict(instance_name=instance, display_id=_monitor_display_id(instance))
+                name = prop('Name')
+                if name and 'generic' not in name.lower():
+                    record['name'] = name
+                manufacturer = prop('MonitorManufacturer')
+                if manufacturer and manufacturer != '(Standard monitor types)':
+                    record['manufacturer'] = manufacturer
+                width, height = prop('ScreenWidth'), prop('ScreenHeight')
+                if width and height:
+                    record['resolution'] = f'{width}x{height}'
+                try:
+                    import winreg
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                        'SYSTEM\\CurrentControlSet\\Enum\\' + instance + '\\Device Parameters') as key:
+                        edid = _parse_edid_data(winreg.QueryValueEx(key, 'EDID')[0])
+                    if edid:
+                        for field in ('manufacturer', 'model'):
+                            if edid.get(field):
+                                record[field] = edid[field]
+                        if edid.get('model'):
+                            record['name'] = ' '.join(filter(None, (edid.get('manufacturer'), edid['model'])))
+                except Exception:
+                    pass
+                merge(record)
+        except Exception as exc:
+            logging.debug(f'Monitor identity collection failed: {exc}')
+    for item in details:
+        if item.get('resolution'):
+            item['name'] += ' - ' + item['resolution']
+    text = '\n'.join(d['name'] for d in details if d['role'] != 'internal')
+    return (text if details else 'Display information unavailable'), details
 
 
 def _sample_baseline_cpu_percent(samples=5, interval=0.5):
@@ -6187,17 +5984,20 @@ def _get_battery_cycle_count():
     return None
 
 
-def _get_panel_details():
+def _get_panel_details(internal_instance_name=None):
     """Get LCD panel details from EDID data (laptops only)"""
-    if platform.system() != "Windows":
+    if platform.system() != "Windows" or not internal_instance_name:
         return None
     
     try:
         ps_script = '''
         $panel = @{}
+        function Normalize-Instance($value) { return (($value -replace '/', '\\') -replace '_\\d+$', '').ToUpperInvariant() }
+        $target = '__INTERNAL_INSTANCE__'
+        $panel['instance_name'] = $target
         
         # Get monitor ID (EDID data)
-        $monitorID = Get-WmiObject -Namespace root\\wmi -Class WmiMonitorID -ErrorAction SilentlyContinue | Select-Object -First 1
+        $monitorID = Get-WmiObject -Namespace root\\wmi -Class WmiMonitorID -ErrorAction SilentlyContinue | Where-Object { (Normalize-Instance $_.InstanceName) -eq $target } | Select-Object -First 1
         if ($monitorID) {
             # Manufacturer code (3-letter code)
             $mfgCode = ($monitorID.ManufacturerName | ForEach-Object { if ($_ -ne 0) { [char]$_ } }) -join ''
@@ -6245,7 +6045,7 @@ def _get_panel_details():
         }
         
         # Get physical size
-        $basic = Get-WmiObject -Namespace root\\wmi -Class WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue | Select-Object -First 1
+        $basic = Get-WmiObject -Namespace root\\wmi -Class WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue | Where-Object { (Normalize-Instance $_.InstanceName) -eq $target } | Select-Object -First 1
         if ($basic) {
             $hSize = $basic.MaxHorizontalImageSize
             $vSize = $basic.MaxVerticalImageSize
@@ -6253,20 +6053,6 @@ def _get_panel_details():
                 # Calculate exact diagonal
                 $diagonal = [math]::Sqrt([math]::Pow($hSize, 2) + [math]::Pow($vSize, 2)) / 2.54
                 
-                # Round to nearest standard panel size (industry standard)
-                $standardSizes = @(10.1, 11.6, 12.5, 13.3, 14.0, 15.6, 17.3, 18.4, 21.5, 24.0, 27.0)
-                $closestSize = $standardSizes[0]
-                $minDiff = [math]::Abs($diagonal - $closestSize)
-                
-                foreach ($size in $standardSizes) {
-                    $diff = [math]::Abs($diagonal - $size)
-                    if ($diff -lt $minDiff) {
-                        $minDiff = $diff
-                        $closestSize = $size
-                    }
-                }
-                
-                $panel['size_inches'] = $closestSize
                 $panel['size_inches_exact'] = [math]::Round($diagonal, 1)
                 $panel['size_cm_h'] = $hSize
                 $panel['size_cm_v'] = $vSize
@@ -6274,7 +6060,7 @@ def _get_panel_details():
         }
         
         # Get native resolution
-        $modes = Get-WmiObject -Namespace root\\wmi -Class WmiMonitorListedSupportedSourceModes -ErrorAction SilentlyContinue | Select-Object -First 1
+        $modes = Get-WmiObject -Namespace root\\wmi -Class WmiMonitorListedSupportedSourceModes -ErrorAction SilentlyContinue | Where-Object { (Normalize-Instance $_.InstanceName) -eq $target } | Select-Object -First 1
         if ($modes -and $modes.MonitorSourceModes) {
             $native = $modes.MonitorSourceModes | Sort-Object -Property HorizontalActivePixels -Descending | Select-Object -First 1
             if ($native) {
@@ -6284,51 +6070,9 @@ def _get_panel_details():
         }
         
         # Get connection type
-        $conn = Get-WmiObject -Namespace root\\wmi -Class WmiMonitorConnectionParams -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($conn) {
-            # Extract model code from InstanceName (e.g., "DISPLAY\\CMN1514\\..." or "DISPLAY\\CMN15F5\\...")
-            # HP Laptop pattern learned: "DISPLAY\\CMN15F5\\4&642b5b0&0&UID8388688_0"
-            # Pattern: DISPLAY\\[MODELCODE]\\... where MODELCODE is extracted (e.g., CMN15F5)
-            # See HP_LAPTOP_KNOWLEDGE_BASE.md for detailed LCD panel patterns
-            # Try multiple patterns to catch different formats
-            if ($conn.InstanceName) {
-                # Pattern 1: DISPLAY\\MODELCODE\\ (most common, e.g., DISPLAY\\CMN15F5\\...)
-                if ($conn.InstanceName -match 'DISPLAY\\\\+([A-Z0-9]{6,})\\\\') {
-                    $panel['model_code'] = $matches[1]
-                }
-                # Pattern 2: \\MODELCODE\\ (fallback for other formats)
-                elseif ($conn.InstanceName -match '\\\\([A-Z]{3}[A-Z0-9]{3,})\\\\') {
-                    $panel['model_code'] = $matches[1]
-                }
-                # Pattern 3: Any alphanumeric code after backslashes (broader match)
-                elseif ($conn.InstanceName -match '\\\\([A-Z0-9]{6,})\\\\') {
-                    $panel['model_code'] = $matches[1]
-                }
-            }
-            
-            # VideoOutputTechnology codes
-            $techMap = @{
-                -1 = 'Internal'
-                0 = 'VGA'
-                1 = 'S-Video'
-                2 = 'Composite'
-                3 = 'Component'
-                4 = 'DVI'
-                5 = 'HDMI'
-                6 = 'LVDS'
-                8 = 'D-Jpn'
-                9 = 'SDI'
-                10 = 'DisplayPort (External)'
-                11 = 'DisplayPort (Embedded)'
-                12 = 'UDI (External)'
-                13 = 'UDI (Embedded)'
-                14 = 'SDTV Dongle'
-                15 = 'Miracast'
-                2147483648 = 'Internal (eDP/LVDS)'
-            }
-            if ($conn.VideoOutputTechnology -and $techMap.ContainsKey([int]$conn.VideoOutputTechnology)) {
-                $panel['connection_type'] = $techMap[[int]$conn.VideoOutputTechnology]
-            }
+        $conn = Get-WmiObject -Namespace root\\wmi -Class WmiMonitorConnectionParams -ErrorAction SilentlyContinue | Where-Object { (Normalize-Instance $_.InstanceName) -eq $target } | Select-Object -First 1
+        if ($conn -and $null -ne $conn.VideoOutputTechnology) {
+            $panel['video_output_technology'] = [long]$conn.VideoOutputTechnology
         }
         
         # Detect touch screen capability (ULTRA STRICT - only actual touch digitizers)
@@ -6369,6 +6113,7 @@ def _get_panel_details():
         $panel | ConvertTo-Json -Compress
         '''
         
+        ps_script = ps_script.replace('__INTERNAL_INSTANCE__', _normalize_monitor_instance(internal_instance_name).replace("'", "''"))
         result = subprocess.run(
             [_POWERSHELL_EXE, "-NoProfile", "-Command", ps_script],
             capture_output=True,
@@ -6380,11 +6125,21 @@ def _get_panel_details():
         if result.returncode == 0 and result.stdout.strip():
             panel_data = json.loads(result.stdout.strip())
             
-            # Only return if we got meaningful data
-            if panel_data and (panel_data.get('manufacturer') or panel_data.get('resolution_h')):
-                logging.info(f"LCD Panel: {panel_data.get('size_inches', 'Unknown')}\" {panel_data.get('manufacturer', 'Unknown')} {panel_data.get('resolution_h')}x{panel_data.get('resolution_v')}, Touch={panel_data.get('is_touch', False)} [TAG:PANEL size={panel_data.get('size_inches')} touch={panel_data.get('is_touch')}]")
-                logging.debug(f"LCD Panel full details: {panel_data}")
-                return panel_data
+            if not isinstance(panel_data, dict):
+                return None
+            instance = _normalize_monitor_instance(panel_data.get('instance_name'))
+            if instance != _normalize_monitor_instance(internal_instance_name):
+                return None
+            connection = classify_display_connection(panel_data.get('video_output_technology'))
+            if connection.role != 'internal':
+                return None
+            size = normalize_panel_size(panel_data.get('size_inches_exact'))
+            panel_data.update(instance_name=instance, model_code=_monitor_display_id(instance),
+                              connection_role=connection.role, connection_type=connection.connection_label,
+                              size_inches_exact=size.exact_inches, size_inches_nominal=size.nominal_inches,
+                              size_inches=size.nominal_inches or size.exact_inches, size_display=size.display_label)
+            logging.info(f"LCD Panel: {panel_data['model_code']} {size.display_label}, {connection.connection_label}, Touch={panel_data.get('is_touch', False)}")
+            return panel_data
         
         return None
     except Exception as e:
