@@ -11,7 +11,7 @@ Base: `2c893f80e327c5be5d1338d9cdc7faada874a964` (beta.50 security foundation).
 - [x] Display topology, internal panel matching and consumers (beta.53 tasks 1–6).
 - [x] Check counters, log integrity and release gates (beta.54 tasks 1–6).
 - [x] Version 2.2.45-beta.54, changelog, integrated review and regression suite.
-- [ ] Windows portable and installer build; prepare artifacts for user testing.
+- [x] Windows portable and installer build; prepare artifacts for user testing.
 
 ## Integration review
 
@@ -35,5 +35,6 @@ Each functional slice agrees with its detailed implementation plan. One wording 
 - Installer, settings, and package versions agree on 2.2.45-beta.54.
 - Jeff explicitly approved the public GitHub branch push and Windows build. Branch published to the existing repository; main and release tags remain unchanged.
 - Initial Windows run 34414209778 executed all229 tests, including the production PowerShell fixture. Six test failures exposed locale-default file decoding in tests; explicit UTF-8 reads corrected the test inputs. Packaging stopped before producing artifacts, as required.
+- Windows run 34414441006 passed all229 tests with no skips and built both artifacts from909c8df. Downloaded ZIP checksums match GitHub metadata and CRC tests pass; packaged version is2.2.45-beta.54. Delivery files and detailed evidence are in the main project's release/2.2.45-beta.54 folder. Hardware testing remains with Jeff.
 - Final independent source review accepted the combined CPU/storage/display/reliability changes for Windows build and user testing, with no new important code finding. This does not qualify the unbuilt Windows artifacts or unperformed physical tests.
 - Storage precedence clarification: authoritative SMART/Get-PhysicalDisk evidence outranks model markers, which outrank generic Win32_DiskDrive media text. Getting this wrong could mislabel HDD/SSD and select inappropriate extended tests; the reviewed regression cases cover the conflict.
