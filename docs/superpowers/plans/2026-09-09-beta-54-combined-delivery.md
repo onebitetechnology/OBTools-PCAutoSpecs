@@ -10,7 +10,7 @@ Base: `2c893f80e327c5be5d1338d9cdc7faada874a964` (beta.50 security foundation).
 - [x] Storage identity after SMART merge and separate performance bands (beta.52 tasks 1–6).
 - [x] Display topology, internal panel matching and consumers (beta.53 tasks 1–6).
 - [x] Check counters, log integrity and release gates (beta.54 tasks 1–6).
-- [ ] Version 2.2.45-beta.54, changelog, integrated review and regression suite.
+- [x] Version 2.2.45-beta.54, changelog, integrated review and regression suite.
 - [ ] Windows portable and installer build; prepare artifacts for user testing.
 
 ## Integration review
@@ -34,3 +34,5 @@ Each functional slice agrees with its detailed implementation plan. One wording 
 - Combined reliability/metadata implementation: 9801b96. Local suite: 228 passed, one PowerShell execution test skipped because this Mac lacks the runtime. The test must run in Windows CI.
 - Installer, settings, and package versions agree on 2.2.45-beta.54.
 - Public GitHub branch push awaits explicit user approval requested through the app; automatic approval review rejected source publication. No new commits have been pushed.
+- Final independent source review accepted the combined CPU/storage/display/reliability changes for Windows build and user testing, with no new important code finding. This does not qualify the unbuilt Windows artifacts or unperformed physical tests.
+- Storage precedence clarification: authoritative SMART/Get-PhysicalDisk evidence outranks model markers, which outrank generic Win32_DiskDrive media text. Getting this wrong could mislabel HDD/SSD and select inappropriate extended tests; the reviewed regression cases cover the conflict.
