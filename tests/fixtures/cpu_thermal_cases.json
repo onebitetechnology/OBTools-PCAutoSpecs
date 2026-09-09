@@ -1,0 +1,70 @@
+[
+  {
+    "ramp": [
+      55,
+      72,
+      95
+    ],
+    "load": [
+      74,
+      75,
+      74,
+      75
+    ],
+    "aborted": false,
+    "evidence": null,
+    "expected": "suspected"
+  },
+  {
+    "ramp": [
+      80
+    ],
+    "load": [
+      91,
+      92,
+      92
+    ],
+    "aborted": false,
+    "evidence": null,
+    "expected": "unavailable"
+  },
+  {
+    "ramp": [
+      75
+    ],
+    "load": [
+      75,
+      75
+    ],
+    "aborted": false,
+    "evidence": null,
+    "expected": "unavailable"
+  },
+  {
+    "ramp": [
+      100
+    ],
+    "load": [],
+    "aborted": true,
+    "evidence": null,
+    "expected": "unavailable"
+  },
+  {
+    "ramp": [],
+    "load": [],
+    "aborted": false,
+    "evidence": null,
+    "expected": "unavailable"
+  },
+  {
+    "ramp": [
+      95
+    ],
+    "load": [
+      75
+    ],
+    "aborted": false,
+    "evidence": true,
+    "expected": "confirmed"
+  }
+]

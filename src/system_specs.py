@@ -5,6 +5,7 @@ Fixed issues: storage duplication, serial number detection, enhanced GPU info, b
 """
 
 import platform
+from hardware_classification import classify_intel_cpu, normalize_cpu_clocks
 import sys
 import logging
 import subprocess
@@ -1304,7 +1305,7 @@ def _get_os_info(com_wmi):
 
 
 def _get_base_clock_from_registry(cpu_name=None):
-    """Try to get CPU base clock from Windows registry, with validation"""
+    """Return an audited model base clock (legacy function name retained)."""
     if platform.system() != "Windows":
         return None
     
@@ -1319,49 +1320,11 @@ def _get_base_clock_from_registry(cpu_name=None):
         "11900K": 3500, "11700K": 3600, "11600K": 3700,
     }
     
-    try:
-        import winreg
-        key_path = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
-            try:
-                reg_clock_mhz, _ = winreg.QueryValueEx(key, "~MHz")
-                reg_clock_mhz = int(reg_clock_mhz)
-                
-                # Validate: If CPU name provided, check if registry value matches known base clock
-                # Registry often returns current speed, not base speed
-                if cpu_name:
-                    cpu_upper = cpu_name.upper()
-                    for model, known_base in KNOWN_BASE_CLOCKS.items():
-                        if model.upper() in cpu_upper:
-                            # For low-frequency CPUs (<2GHz), use tighter tolerance (5% or 50MHz, whichever is larger)
-                            # For high-frequency CPUs, use 200MHz tolerance
-                            if known_base < 2000:
-                                tolerance = max(50, int(known_base * 0.05))  # 5% or 50MHz minimum
-                            else:
-                                tolerance = 200
-                            
-                            # If registry value is close to known base, use it
-                            if abs(reg_clock_mhz - known_base) <= tolerance:
-                                return reg_clock_mhz
-                            # Otherwise, registry is likely showing current speed, use known base
-                            else:
-                                logging.debug(f"Registry clock ({reg_clock_mhz}MHz) doesn't match known base ({known_base}MHz) for {model} (tolerance: {tolerance}MHz), using known base")
-                                return known_base
-                
-                # If no CPU match, return registry value (might be current speed, but better than nothing)
-                return reg_clock_mhz
-            except FileNotFoundError:
-                return None
-    except Exception:
-        return None
-    
-    # Fallback: Try to get from CPU name database
+    # Registry ~MHz can be live; only audited model values are base clocks.
     if cpu_name:
-        cpu_upper = cpu_name.upper()
         for model, known_base in KNOWN_BASE_CLOCKS.items():
-            if model.upper() in cpu_upper:
+            if re.search(r'\b' + re.escape(model) + r'\b', cpu_name.upper()):
                 return known_base
-    
     return None
 
 
@@ -1791,42 +1754,8 @@ def _get_cpu_enhanced_details(cpu_name):
 
         # Check for Core processors (8th gen+)
         elif 'CORE' in cpu_upper:
-            # Extract generation number - be more specific about the patterns
-            # Match patterns like "i7-7700" and extract "7" as the generation
-            core_model_match = re.search(r'\bI[3579]\s*-\s*(\d{4,5})[A-Z0-9]*\b', cpu_name, re.IGNORECASE)
-            gen_match = re.search(r'(\d+)(?:TH|ST|ND|RD)\s+GEN|(\d+)TH\s+GEN', cpu_name, re.IGNORECASE)
-            gen_num = None
-            if core_model_match:
-                model_number = core_model_match.group(1)
-                gen_num = int(model_number[:2] if len(model_number) >= 5 else model_number[:1])
-                logging.debug(
-                    f"Intel Core model {model_number} detected as {gen_num}th gen"
-                )
-            elif gen_match:
-                # Debug which group matched
-                logging.debug(f"Core gen_match groups: {gen_match.groups()}")
-                gen_num = int(gen_match.group(1) or gen_match.group(2))
-
-            if gen_num is not None:
-                if gen_num >= 8:  # 8th generation and newer
-                    windows_compat = "Windows 11 compatible"
-                    logging.debug(f"Intel Core {gen_num}th gen detected - {windows_compat}")
-                else:
-                    windows_compat = "Windows 10 only"
-                    logging.debug(f"Intel Core {gen_num}th gen detected - {windows_compat}")
-            elif any(series in cpu_upper for series in ['10000X', '9000X', '7000X']):
-                # Core X-series are Windows 11 compatible
-                windows_compat = "Windows 11 compatible"
-                logging.debug(f"Intel Core X-series detected - {windows_compat}")
-            else:
-                # Unknown Core series - check if it might be 8th gen or newer by looking for patterns
-                # Most modern Core processors without explicit gen numbers are likely compatible
-                if any(indicator in cpu_upper for indicator in ['I3-', 'I5-', 'I7-', 'I9-', 'M3-', 'M5-', 'M7-', 'M9-']):
-                    windows_compat = "Windows 11 compatible"
-                    logging.debug(f"Intel Core (modern series) detected - {windows_compat}")
-                else:
-                    windows_compat = "Unknown"
-                    logging.debug(f"Intel Core (unknown series) - {windows_compat}")
+            identity = classify_intel_cpu(cpu_name)
+            windows_compat = identity.windows_compatibility
 
         # Check for Celeron processors (3000 series+)
         elif 'CELERON' in cpu_upper:
@@ -1931,10 +1860,7 @@ def _get_cpu_enhanced_details(cpu_name):
             windows_compat = "Unknown"
             logging.debug(f"Unknown Intel processor '{cpu_name}' - {windows_compat}")
 
-        # Extract generation for return statement if available
-        generation = 'Unknown'
-        if 'gen_num' in locals() and gen_num is not None:
-            generation = f"{gen_num}th Gen"
+        generation = classify_intel_cpu(cpu_name).generation if 'CORE' in cpu_upper else 'Unknown'
 
         return {
             'generation': generation,
@@ -2071,7 +1997,7 @@ def _get_cpu_info(com_wmi):
                     cores = cpu.Properties_("NumberOfCores").Value or 0
                     threads = cpu.Properties_("NumberOfLogicalProcessors").Value or 0
                     
-                    # Get clock speeds - MaxClockSpeed is often the turbo/boost speed
+                    # WMI clocks are observed evidence, not authoritative turbo values.
                     try:
                         max_clock_mhz = int(cpu.Properties_("MaxClockSpeed").Value) if cpu.Properties_("MaxClockSpeed").Value else None
                         current_clock_mhz = int(cpu.Properties_("CurrentClockSpeed").Value) if cpu.Properties_("CurrentClockSpeed").Value else None
@@ -2079,37 +2005,17 @@ def _get_cpu_info(com_wmi):
                         max_clock_mhz = None
                         current_clock_mhz = None
                     
-                    # Base clock from registry (most accurate for base)
+                    # Authoritative base clock from the audited model table.
                     base_clock_mhz = _get_base_clock_from_registry(name)
                     
                     # Try to get boost speed from CPU database or name parsing
                     boost_clock_mhz = _parse_cpu_boost_speed(name)
                     
-                    # Build clock info string with clear labeling
-                    clock_info = ""
-                    
-                    # Base clock (from registry)
-                    if base_clock_mhz:
-                        base_ghz = base_clock_mhz / 1000.0
-                        clock_info = f" | Base: {base_ghz:.2f} GHz"
-                    
-                    # Boost/Turbo clock (prioritize parsed database, fallback to WMI MaxClockSpeed)
-                    if boost_clock_mhz:
-                        # Use parsed boost speed from database
-                        boost_ghz = boost_clock_mhz / 1000.0
-                        clock_info += f" | Boost: {boost_ghz:.2f} GHz"
-                    elif max_clock_mhz and max_clock_mhz != base_clock_mhz:
-                        # Fallback to WMI MaxClockSpeed if parser didn't find it
-                        boost_ghz = max_clock_mhz / 1000.0
-                        clock_info += f" | Turbo: {boost_ghz:.2f} GHz"
-                    
-                    # Current clock (actual running speed) - only show if significantly different
-                    if current_clock_mhz:
-                        current_ghz = current_clock_mhz / 1000.0
-                        # Only show if different from base/boost to reduce clutter
-                        if current_clock_mhz != base_clock_mhz and current_clock_mhz != boost_clock_mhz and current_clock_mhz != max_clock_mhz:
-                            clock_info += f" | Current: {current_ghz:.2f} GHz"
-                    
+                    clocks = normalize_cpu_clocks(
+                        authoritative_base_mhz=base_clock_mhz,
+                        authoritative_boost_mhz=boost_clock_mhz,
+                        current_mhz=current_clock_mhz, wmi_max_mhz=max_clock_mhz)
+                    clock_info = ''.join(f' | {part}' for part in clocks.display_parts())
                     return f"{name}{clock_info} ({cores}C/{threads}T)"
             except Exception as e:
                 logging.debug(f"Failed to get CPU info via COM/WMI: {e}")

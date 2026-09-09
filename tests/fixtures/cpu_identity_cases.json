@@ -1,0 +1,58 @@
+[
+  {
+    "name": "Intel Core i5-6300U",
+    "family": "Intel Core",
+    "generation": "6th Gen",
+    "generation_number": 6,
+    "windows_compatibility": "Windows 10 only"
+  },
+  {
+    "name": "Intel Core i7-1165G7",
+    "family": "Intel Core",
+    "generation": "11th Gen",
+    "generation_number": 11,
+    "windows_compatibility": "Windows 11 compatible"
+  },
+  {
+    "name": "Intel Core i7-1195G7",
+    "family": "Intel Core",
+    "generation": "11th Gen",
+    "generation_number": 11,
+    "windows_compatibility": "Windows 11 compatible"
+  },
+  {
+    "name": "Intel Core i7-1255U",
+    "family": "Intel Core",
+    "generation": "12th Gen",
+    "generation_number": 12,
+    "windows_compatibility": "Windows 11 compatible"
+  },
+  {
+    "name": "13th Gen Intel Core i7-1355U",
+    "family": "Intel Core",
+    "generation": "13th Gen",
+    "generation_number": 13,
+    "windows_compatibility": "Windows 11 compatible"
+  },
+  {
+    "name": "Intel Core i9-14900HX",
+    "family": "Intel Core",
+    "generation": "14th Gen",
+    "generation_number": 14,
+    "windows_compatibility": "Windows 11 compatible"
+  },
+  {
+    "name": "Intel Core Ultra 9 185H",
+    "family": "Intel Core Ultra",
+    "generation": "Core Ultra Series 1",
+    "generation_number": null,
+    "windows_compatibility": "Windows 11 compatible"
+  },
+  {
+    "name": "Intel Core i7 processor",
+    "family": "Intel Core",
+    "generation": "Unknown",
+    "generation_number": null,
+    "windows_compatibility": "Unknown — verify manually"
+  }
+]

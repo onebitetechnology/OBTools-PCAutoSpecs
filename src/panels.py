@@ -5,6 +5,7 @@ ActivityLogPanel: colored log output with context menu.
 """
 
 import re
+from diagnostics.thermal_summary import cpu_temperature_rows
 import logging
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QTextCharFormat, QColor, QAction
@@ -478,26 +479,11 @@ class SystemInfoPanel(QWidget):
         if cpu_full == 'Test skipped':
             sec.set_row_value('cpu', 'Test skipped', COLORS['warning'])
             return
-        cpu_name_match = re.match(r'^(.*?)\s*(?:\|\s*Base:|$)', cpu_full)
-        cpu_name = cpu_name_match.group(1).strip() if cpu_name_match else cpu_full
-        sec.set_row_value('cpu', cpu_name)
+        sec.set_row_value('cpu', cpu_full.split(' | ')[0])
 
-        # Clock speeds
-        base_match = re.search(r'Base:\s*([\d.]+)\s*GHz', cpu_full)
-        boost_match = (re.search(r'Boost:\s*([\d.]+)\s*GHz', cpu_full) or
-                       re.search(r'Turbo:\s*([\d.]+)\s*GHz', cpu_full))
-        base_clock = f"{base_match.group(1)} GHz" if base_match else None
-        boost_clock = f"{boost_match.group(1)} GHz" if boost_match else None
-
-        if not base_clock and not boost_clock:
-            pair = re.search(r'([\d.]+)\s*GHz\s*/\s*([\d.]+)\s*GHz', cpu_full)
-            if pair:
-                base_clock = f"{pair.group(1)} GHz"
-                boost_clock = f"{pair.group(2)} GHz"
-
-        if base_clock or boost_clock:
-            parts = [p for p in (base_clock, boost_clock) if p]
-            sec.add_info_row('Base / Boost Clock', ' / '.join(parts))
+        # Preserve each clock's evidence label from the collector.
+        for label, value in re.findall(r'(Base|Boost|Current|WMI max):\s*([\d.]+)\s*GHz', cpu_full):
+            sec.add_info_row(f'{label} Clock', f'{value} GHz')
 
         # Cores / Threads
         ct = re.search(r'\((\d+)C/(\d+)T\)', cpu_full)
@@ -543,24 +529,8 @@ class SystemInfoPanel(QWidget):
 
             # CPU Temperature — under load
             load_temp = advanced.get('cpu_load_temp', {})
-            if load_temp.get('status') == 'cancelled':
-                sec.add_info_row('Temp — Load', 'Cancelled by tech', color=COLORS['warning'])
-            if load_temp.get('status') == 'ok' and load_temp.get('peak_temp_c'):
-                peak = load_temp['peak_temp_c']
-                aborted = load_temp.get('aborted', False)
-                load_sensor = load_temp.get('sensor')
-                if peak < 75:
-                    color, label = COLORS['success'], '(Normal)'
-                elif peak < 90:
-                    color, label = COLORS['warning'], '(Warm)'
-                else:
-                    color, label = COLORS['error'], '(Hot)'
-                suffix = ' — thermal limit hit!' if aborted else ''
-                if load_sensor:
-                    suffix += f" — {load_sensor}"
-                sec.add_info_row('Temp — Load',
-                                 f"{peak:.0f}\u00b0C {label}{suffix}",
-                                 color=color)
+            for label, value, severity in cpu_temperature_rows(load_temp):
+                sec.add_info_row(label, value, color=COLORS[severity])
 
             if cpu_details.get('windows_compatibility'):
                 wc = cpu_details['windows_compatibility']

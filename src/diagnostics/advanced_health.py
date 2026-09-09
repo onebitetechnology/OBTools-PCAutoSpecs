@@ -13,6 +13,7 @@ All functions fail gracefully with status: "unavailable" if checks cannot be per
 """
 
 import subprocess
+from diagnostics.thermal_summary import summarize_cpu_temperature
 import json
 import logging
 import os
@@ -1321,6 +1322,18 @@ def collect_cpu_temp_under_load(
         except Exception:
             return False
 
+    ramp_samples = []
+    samples = []
+
+    def _summary(aborted=False):
+        result = summarize_cpu_temperature(
+            ramp_samples=ramp_samples, load_samples=samples,
+            thermal_limit_c=thermal_limit_c, aborted=aborted,
+            independent_throttle_detected=None)
+        result['throttling_detected'] = result['throttling_evidence'] == 'confirmed'
+        result['ramp_samples'] = list(ramp_samples)
+        return result
+
     workers = []
     load_queues = []
     try:
@@ -1351,6 +1364,7 @@ def collect_cpu_temp_under_load(
             _log("  CPU stress test cancelled before ramp began\n")
             return {
                 "status": "cancelled",
+                **_summary(True),
                 "aborted": True,
                 "abort_reason": "Cancelled by tech",
                 "samples": [],
@@ -1368,7 +1382,7 @@ def collect_cpu_temp_under_load(
                 _log("  CPU stress test cancelled during ramp-up\n")
                 return {
                     "status": "cancelled",
-                    "peak_temp_c": round(ramp_peak, 1) if ramp_peak > 0 else None,
+                    **_summary(True),
                     "sensor": last_sensor,
                     "aborted": True,
                     "abort_reason": "Cancelled by tech",
@@ -1388,6 +1402,7 @@ def collect_cpu_temp_under_load(
             temp = temp_info.get('temp_c') if temp_info else None
             if temp is not None:
                 last_sensor = temp_info.get('sensor') or last_sensor
+                ramp_samples.append(round(temp, 1))
                 ramp_peak = max(ramp_peak, temp)
                 pct = int(fraction * 100)
                 _log(f"  Ramp [{int(elapsed)}s / {ramp_sec}s] {pct}% load — {temp:.0f}°C\n")
@@ -1401,11 +1416,11 @@ def collect_cpu_temp_under_load(
                     _log(f"  ⚠ {abort_reason} — aborting\n")
                     return {
                         "status": "ok",
-                        "peak_temp_c": round(temp, 1),
+                        **_summary(True),
                         "sensor": last_sensor,
                         "aborted": True,
                         "abort_reason": abort_reason,
-                        "samples": [round(temp, 1)],
+                        "samples": [],
                         "duration_sec": round(time.monotonic() - ramp_start, 1),
                     }
 
@@ -1431,8 +1446,7 @@ def collect_cpu_temp_under_load(
                 _log("  CPU stress test cancelled during measurement phase\n")
                 return {
                     "status": "cancelled",
-                    "peak_temp_c": round(max(ramp_peak, max(samples) if samples else 0.0), 1)
-                    if (ramp_peak > 0 or samples) else None,
+                    **_summary(True),
                     "sensor": last_sensor,
                     "aborted": True,
                     "abort_reason": "Cancelled by tech",
@@ -1461,33 +1475,26 @@ def collect_cpu_temp_under_load(
                     _log(f"  ⚠ {abort_reason} — aborting stress test\n")
                     break
 
-        # Use the highest temp seen across BOTH ramp and measurement phases
-        # This catches thermal throttling — CPU may spike during ramp then cool
-        # as throttling kicks in, making the measurement phase look deceptively cool
-        measurement_peak = max(samples) if samples else 0.0
-        peak = round(max(ramp_peak, measurement_peak), 1)
-        throttling = ramp_peak > measurement_peak + 10  # 10°C+ drop = likely throttling
-        if throttling:
-            _log(f"  Note: Peak {peak:.0f}°C occurred during ramp (thermal throttling detected)\n")
+        summary = _summary(aborted)
+        if summary['throttling_evidence'] == 'suspected':
+            _log('  Ramp-to-load drop: possible throttling; independent confirmation unavailable\n')
 
         if aborted:
             return {
                 "status": "ok",
-                "peak_temp_c": peak,
+                **summary,
                 "sensor": last_sensor,
                 "aborted": True,
                 "abort_reason": abort_reason,
-                "throttling_detected": throttling,
                 "samples": samples,
                 "duration_sec": round(time.monotonic() - start, 1),
             }
 
         return {
             "status": "ok",
-            "peak_temp_c": peak,
+            **summary,
             "sensor": last_sensor,
             "aborted": False,
-            "throttling_detected": throttling,
             "samples": samples,
             "duration_sec": duration_sec,
         }
@@ -1496,6 +1503,7 @@ def collect_cpu_temp_under_load(
         logging.warning(f"CPU load temp test failed: {e}")
         return {
             "status": "unavailable",
+            **_summary(),
             "reason": str(e),
         }
 
@@ -2391,7 +2399,7 @@ def collect_advanced_health_summary(
             and load_result.get('status') == 'ok'
         ):
             idle_temp = temps_result.get('cpu_temp_c')
-            load_peak = load_result.get('peak_temp_c')
+            load_peak = load_result.get('load_peak_temp_c')
             if (
                 isinstance(idle_temp, (int, float))
                 and isinstance(load_peak, (int, float))

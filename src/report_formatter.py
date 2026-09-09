@@ -12,6 +12,7 @@ Usage:
 """
 
 import re
+from diagnostics.thermal_summary import cpu_temperature_rows, cpu_temperature_issues
 from datetime import datetime
 from pathlib import Path
 
@@ -668,14 +669,8 @@ class ReportFormatter:
         idle_temp = temps.get('cpu_temp_c') if temps.get('status') == 'ok' else None
         if 'cpu' not in skip_cats and idle_temp and idle_temp > 60:
             issues.append(f"CPU Temp (Idle): HIGH ({idle_temp:.0f}\u00b0C \u2014 check thermal paste/cooling)")
-        if 'cpu' not in skip_cats and load.get('status') == 'ok' and load.get('peak_temp_c'):
-            peak = load['peak_temp_c']
-            if load.get('aborted'):
-                issues.append(f"CPU Temp (Load): CRITICAL \u2014 thermal limit hit at {peak:.0f}\u00b0C")
-            elif load.get('throttling_detected'):
-                issues.append(f"CPU Temp (Load): {peak:.0f}\u00b0C \u2014 thermal throttling detected (cooling service recommended)")
-            elif peak > 90:
-                issues.append(f"CPU Temp (Load): HIGH ({peak:.0f}\u00b0C \u2014 cooling service recommended)")
+        if 'cpu' not in skip_cats:
+            issues.extend(cpu_temperature_issues(load))
 
         # GPU load temp
         gpu_load = advanced.get('gpu_load_temp', {})
@@ -882,12 +877,8 @@ class ReportFormatter:
             issues.append(f"CPU Temp (Idle): HIGH ({idle_temp:.0f}°C — check thermal paste/cooling)")
 
         # Load temp: >90°C is concerning, thermal abort means it hit 100°C
-        if 'cpu' not in skip_cats and load.get('status') == 'ok' and load.get('peak_temp_c'):
-            peak = load['peak_temp_c']
-            if load.get('aborted'):
-                issues.append(f"CPU Temp (Load): CRITICAL — thermal limit hit at {peak:.0f}°C (urgent cooling service needed)")
-            elif peak > 90:
-                issues.append(f"CPU Temp (Load): HIGH ({peak:.0f}°C — cooling service recommended)")
+        if 'cpu' not in skip_cats:
+            issues.extend(cpu_temperature_issues(load))
 
         # Only show critical issues if there ARE any — no "all clear" filler
         wifi = advanced.get('wifi', {})
@@ -946,15 +937,9 @@ class ReportFormatter:
         cpu_model = cpu_model.replace('CPU @', '').strip()
         lines.append(f"<strong>Processor:</strong> {cpu_model}")
 
-        parts = []
-        base_match = re.search(r'Base:\s*([\d.]+)\s*GHz', cpu_raw)
-        boost_match = re.search(r'(?:Boost|Turbo):\s*([\d.]+)\s*GHz', cpu_raw)
-        if base_match:
-            parts.append(f"{base_match.group(1)} GHz")
-        if boost_match:
-            parts.append(f"{boost_match.group(1)} GHz")
-        if parts:
-            lines.append(f"<strong>Base / Boost Clock:</strong> {' / '.join(parts)}")
+        for label, value in re.findall(r'(Base|Boost|Current|WMI max):\s*([\d.]+)\s*GHz', cpu_raw):
+            lines.append(f'<strong>{label} Clock:</strong> {value} GHz')
+
 
         ct = re.search(r'\((\d+)C/(\d+)T\)', cpu_raw)
         if ct:
@@ -982,19 +967,8 @@ class ReportFormatter:
             lines.append("<strong>Temp — Idle:</strong> Ignored questionable sensor spike")
 
         load = advanced.get('cpu_load_temp', {})
-        if load.get('status') == 'cancelled':
-            lines.append("<strong>Temp — Load:</strong> Cancelled by tech")
-        elif load.get('status') == 'ok' and load.get('peak_temp_c'):
-            peak = load['peak_temp_c']
-            aborted = load.get('aborted', False)
-            sensor = load.get('sensor')
-            p_label = '(Hot)' if peak >= 90 else '(Warm)' if peak >= 75 else '(Normal)'
-            suffix = ' — thermal limit hit!' if aborted else ''
-            if load.get('throttling_detected'):
-                suffix += ' — throttling detected'
-            if sensor:
-                suffix += f" — {sensor}"
-            lines.append(f"<strong>Temp — Load:</strong> {peak:.0f}°C {p_label}{suffix}")
+        for label, value, _ in cpu_temperature_rows(load):
+            lines.append(f'<strong>{label}:</strong> {value}')
 
         if cpu_details.get('windows_compatibility'):
             lines.append(f"<strong>Windows Compat:</strong> {cpu_details['windows_compatibility']}")
@@ -1178,12 +1152,8 @@ class ReportFormatter:
             if ct:
                 lines.append(f"<strong>Cores/Threads:</strong> {ct.group(1)} Physical / {ct.group(2)} Threads")
 
-            # Parse clock speeds from CPU string
-            if 'Base:' in cpu_raw and 'Boost:' in cpu_raw:
-                base_match = re.search(r'Base:\s*([\d.]+)\s*GHz', cpu_raw)
-                boost_match = re.search(r'Boost:\s*([\d.]+)\s*GHz', cpu_raw)
-                if base_match and boost_match:
-                    lines.append(f"<strong>Base/Boost Clock:</strong> {base_match.group(1)} GHz / {boost_match.group(1)} GHz")
+            for label, value in re.findall(r'(Base|Boost|Current|WMI max):\s*([\d.]+)\s*GHz', cpu_raw):
+                lines.append(f'<strong>{label} Clock:</strong> {value} GHz')
 
             socket = cpu_details.get('socket', '')
             if socket:
@@ -1208,18 +1178,8 @@ class ReportFormatter:
             elif temps.get('status') == 'ok' and temps.get('cpu_temp_questionable'):
                 lines.append("<strong>CPU Temp (Idle):</strong> Ignored questionable sensor spike")
             load = advanced.get('cpu_load_temp', {})
-            if load.get('status') == 'cancelled':
-                lines.append("<strong>CPU Temp (Load):</strong> Cancelled by tech")
-            if load.get('status') == 'ok' and load.get('peak_temp_c'):
-                aborted = load.get('aborted', False)
-                peak = load['peak_temp_c']
-                sensor = load.get('sensor')
-                p_label = '(Hot)' if peak >= 90 else '(Warm)' if peak >= 75 else '(Normal)'
-                suffix = ' — thermal limit hit!' if aborted else (
-                    ' — throttling detected' if load.get('throttling_detected') else '')
-                if sensor:
-                    suffix += f" — {sensor}"
-                lines.append(f"<strong>CPU Temp (Load):</strong> {peak:.0f}°C {p_label}{suffix}")
+            for label, value, _ in cpu_temperature_rows(load):
+                lines.append(f'<strong>CPU {label}:</strong> {value}')
 
             # Memory temp (DDR5 only — DDR4 usually not available)
             mem_temp = advanced.get('memory_temp_c')
