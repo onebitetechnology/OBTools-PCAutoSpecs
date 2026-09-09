@@ -3814,6 +3814,11 @@ def _get_display_info(com_wmi):
         if not matches and instance:
             matches = [d for d in details if d['display_id'] == record['display_id']
                        and (len(instance.split('\\')) < 3 or len(d['instance_name'].split('\\')) < 3)]
+        if len(matches) > 1 and len(instance.split('\\')) < 3:
+            # Partial identity cannot establish an additional physical monitor
+            # or identify which existing instance should receive its metadata.
+            logging.debug(f'Ambiguous model-only monitor evidence: {instance}')
+            return
         if len(matches) == 1:
             if len(instance.split('\\')) > len(matches[0]['instance_name'].split('\\')):
                 matches[0]['instance_name'] = instance

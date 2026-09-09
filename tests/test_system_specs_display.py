@@ -59,6 +59,21 @@ def test_no_gpu_identity_fallback(monkeypatch):
     assert specs._get_display_info(object()) == ('Display information unavailable', [])
 
 
+def test_ambiguous_model_only_identity_does_not_add_monitor(monkeypatch):
+    connections = [dict(instance_name=rf'DISPLAY\DEL1234\{instance}_0',
+                        video_output_technology=5) for instance in ('FIRST', 'SECOND')]
+    connection_json(monkeypatch, json.dumps(connections))
+    def query(_wmi, name):
+        rows = [dict(DeviceID=r'DISPLAY\DEL1234', Name='Dell monitor')] if 'PnPEntity' in name else []
+        return NS(Count=len(rows), ItemIndex=lambda i: NS(Properties_=lambda k: NS(Value=rows[i].get(k))))
+    monkeypatch.setattr(specs, '_query_com_wmi', query)
+    text, details = specs._get_display_info(object())
+    assert len(details) == 2
+    assert {d['instance_name'] for d in details} == {r'DISPLAY\DEL1234\FIRST', r'DISPLAY\DEL1234\SECOND'}
+    assert all(d['role'] == 'external' for d in details)
+    assert text.splitlines() == ['DEL1234', 'DEL1234']
+
+
 def test_selected_panel_and_no_arbitrary_fallback(monkeypatch):
     monkeypatch.setattr(specs.platform,'system',lambda:'Windows')
     panel = dict(instance_name=r'DISPLAY\CMN15F5\INTERNAL_0',manufacturer='Chimei Innolux',
